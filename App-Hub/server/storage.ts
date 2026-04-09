@@ -14,6 +14,7 @@ import {
   featureAccess,
   appConfigs,
   ndaSignatures,
+  userSessions,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, sql, count } from "drizzle-orm";
@@ -68,6 +69,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteUser(id: string): Promise<void> {
+    await db.delete(userSessions).where(eq(userSessions.userId, id));
     await db.delete(featureAccess).where(eq(featureAccess.userId, id));
     await db.delete(activityLogs).where(eq(activityLogs.userId, id));
     await db.delete(users).where(eq(users.id, id));

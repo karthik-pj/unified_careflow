@@ -10,6 +10,7 @@ export const dbSchema = schemaName !== "public" ? pgSchema(schemaName) : null;
 const tableCreator = dbSchema ? dbSchema.table : pgTable;
 
 export const sharedSchema = pgSchema("shared");
+export const caresetSchema = pgSchema("careset");
 
 export const users = sharedSchema.table("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -64,6 +65,14 @@ export const sessions = tableCreator("session", {
   sid: text("sid").primaryKey(),
   sess: jsonb("sess").notNull(),
   expire: timestamp("expire", { precision: 6 }).notNull(),
+});
+
+export const userSessions = caresetSchema.table("user_sessions", {
+  id: integer("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  sessionToken: varchar("session_token", { length: 255 }).notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({
