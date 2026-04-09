@@ -44,7 +44,9 @@ export async function registerRoutes(
     session({
       store: new PgSession({
         pool,
-        createTableIfMissing: true,
+        createTableIfMissing: false, // Disabling this because the table already exists
+        schemaName: 'apphub',
+        tableName: 'session'
       }),
       secret: process.env.SESSION_SECRET || "careflow-secret-key",
       resave: false,
