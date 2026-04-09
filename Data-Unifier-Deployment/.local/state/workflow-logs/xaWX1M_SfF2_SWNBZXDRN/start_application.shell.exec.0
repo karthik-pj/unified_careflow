@@ -1,0 +1,36 @@
+[1G[0K⠙[1G[0K
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K⠙[1G[0K10:34:04 AM [express] serving on port 5000
+10:34:04 AM [seed] Database already has data, skipping seed
+10:34:10 AM [express] GET /api/deployments 200 in 12ms
+10:34:10 AM [express] GET /api/nodes 200 in 20ms
+10:34:10 AM [express] GET /api/stats 200 in 20ms
+10:34:32 AM [express] GET /api/nodes 304 in 2ms
+10:34:32 AM [express] GET /api/deployments 304 in 2ms
+10:34:32 AM [express] GET /api/stats 304 in 4ms
+10:34:41 AM [express] GET /api/stats 304 in 3ms
+10:49:40 AM [express] GET /api/stats 304 in 15ms
+10:49:40 AM [express] GET /api/nodes 304 in 13ms
+10:49:40 AM [express] GET /api/deployments 304 in 2ms
+11:02:30 AM [express] GET /api/nodes 304 in 15ms
+11:02:30 AM [express] GET /api/stats 304 in 15ms
+11:02:31 AM [express] GET /api/deployments 304 in 2ms
+11:07:37 AM [express] GET /api/nodes 200 in 15ms
+11:07:37 AM [express] GET /api/deployments 200 in 18ms
+11:07:37 AM [express] GET /api/stats 200 in 21ms
+11:08:08 AM [express] GET /api/stats 304 in 11ms
+11:08:35 AM [express] GET /api/stats 200 in 3ms
+11:08:35 AM [express] GET /api/deployments 200 in 1ms
+11:08:35 AM [express] GET /api/nodes 200 in 12ms
+11:08:38 AM [express] GET /api/stats 304 in 2ms
+11:09:08 AM [express] GET /api/stats 304 in 23ms
+11:09:39 AM [express] GET /api/stats 304 in 19ms
+11:09:46 AM [express] GET /api/stats 304 in 6ms
+11:09:46 AM [express] GET /api/deployments 304 in 3ms
+11:09:46 AM [express] GET /api/nodes 304 in 3ms
+11:10:16 AM [express] GET /api/stats 304 in 28ms
+11:14:00 AM [express] GET /api/deployments 304 in 11ms
+11:14:00 AM [express] GET /api/stats 304 in 17ms
+11:14:00 AM [express] GET /api/nodes 304 in 15ms

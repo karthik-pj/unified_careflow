@@ -1,0 +1,10 @@
+[1G[0K⠙[1G[0K
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K⠙[1G[0K10:19:36 AM [express] serving on port 5000
+10:19:36 AM [seed] Database already has data, skipping seed
+10:19:40 AM [express] GET /api/nodes 304 in 5ms
+10:19:40 AM [express] GET /api/deployments 304 in 20ms
+10:19:40 AM [express] GET /api/stats 200 in 17ms
+10:20:10 AM [express] GET /api/stats 304 in 17ms

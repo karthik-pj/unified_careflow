@@ -1,0 +1,848 @@
+import streamlit as st
+from database import get_db_session, Building, Floor, Gateway, Beacon, Position, RSSISignal, MQTTConfig, AlertZone
+from utils.triangulation import GatewayReading, trilaterate_2d, calculate_velocity, filter_outlier_readings
+from utils.signal_processor import get_signal_processor
+from utils.geojson_renderer import (
+    create_floor_plan_figure, render_zone_polygon, render_gateways,
+    latlon_to_meters as shared_latlon_to_meters, geojson_to_polygon_coords,
+    rotate_points, rotate_point, render_rotation_controls, get_rotation_center
+)
+from datetime import datetime, timedelta
+from io import BytesIO
+from PIL import Image
+from sqlalchemy import func
+import plotly.graph_objects as go
+import numpy as np
+import time
+import base64
+import json
+import math
+
+
+def get_gateway_status(session, gateway_ids, timeout_minutes=2):
+    """
+    Get status for each gateway based on RSSI signal activity.
+    Returns dict: {gateway_id: 'active'|'offline'|'installed'}
+    - active (green): received data within timeout_minutes
+    - offline (red): received data before but not within timeout_minutes  
+    - installed (blue): never received any data
+    """
+    if not gateway_ids:
+        return {}
+    
+    cutoff_time = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    
+    latest_signals = session.query(
+        RSSISignal.gateway_id,
+        func.max(RSSISignal.timestamp).label('last_seen')
+    ).filter(
+        RSSISignal.gateway_id.in_(gateway_ids)
+    ).group_by(RSSISignal.gateway_id).all()
+    
+    signal_times = {sig.gateway_id: sig.last_seen for sig in latest_signals}
+    
+    status = {}
+    for gw_id in gateway_ids:
+        if gw_id not in signal_times:
+            status[gw_id] = 'installed'
+        elif signal_times[gw_id] >= cutoff_time:
+            status[gw_id] = 'active'
+        else:
+            status[gw_id] = 'offline'
+    
+    return status
+
+
+def latlon_to_meters(lat, lon, origin_lat, origin_lon):
+    """Convert lat/lon to local meter coordinates using equirectangular projection"""
+    dx = (lon - origin_lon) * math.cos(math.radians(origin_lat)) * 111000
+    dy = (lat - origin_lat) * 111000
+    return dx, dy
+
+
+def render_dxf_floor_plan(fig, floor):
+    """Render DXF floor plan (stored as GeoJSON) in local meter coordinates"""
+    if not floor.floor_plan_geojson:
+        return False
+    
+    try:
+        geojson_data = json.loads(floor.floor_plan_geojson)
+        
+        for feature in geojson_data.get('features', []):
+            props = feature.get('properties', {})
+            geom = feature.get('geometry', {})
+            geom_type = props.get('geomType', '')
+            entity_type = props.get('entityType', '')
+            
+            if geom.get('type') == 'Polygon':
+                coords = geom.get('coordinates', [[]])[0]
+                if coords:
+                    xs = [c[0] for c in coords]
+                    ys = [c[1] for c in coords]
+                    
+                    name = props.get('name', 'Unnamed')
+                    
+                    if geom_type == 'room':
+                        fill_color = 'rgba(46, 92, 191, 0.15)'
+                        line_color = '#2e5cbf'
+                    else:
+                        fill_color = 'rgba(200, 200, 200, 0.1)'
+                        line_color = '#666'
+                    
+                    fig.add_trace(go.Scatter(
+                        x=xs,
+                        y=ys,
+                        fill='toself',
+                        fillcolor=fill_color,
+                        line=dict(color=line_color, width=1),
+                        name=name,
+                        hovertemplate=f"<b>{name}</b><extra></extra>",
+                        mode='lines',
+                        showlegend=False
+                    ))
+            
+            elif geom.get('type') == 'LineString':
+                coords = geom.get('coordinates', [])
+                if coords:
+                    xs = [c[0] for c in coords]
+                    ys = [c[1] for c in coords]
+                    
+                    if geom_type == 'wall':
+                        line_width = 2
+                        line_color = '#333'
+                    else:
+                        line_width = 1
+                        line_color = '#666'
+                    
+                    fig.add_trace(go.Scatter(
+                        x=xs,
+                        y=ys,
+                        mode='lines',
+                        line=dict(color=line_color, width=line_width),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ))
+        
+        return True
+    except Exception as e:
+        return False
+
+
+def render_geojson_floor_plan(fig, floor, rotation_angle=0, rotation_center=None):
+    """Render GeoJSON floor plan as Plotly traces in meter coordinates"""
+    if not floor.floor_plan_geojson or not floor.origin_lat or not floor.origin_lon:
+        return False
+    
+    try:
+        geojson_data = json.loads(floor.floor_plan_geojson)
+        rendered_something = False
+        
+        for feature in geojson_data.get('features', []):
+            props = feature.get('properties', {})
+            geom = feature.get('geometry', {})
+            geom_type = props.get('geomType', '')
+            geometry_type = geom.get('type', '')
+            name = props.get('name', 'Unnamed')
+            
+            # Handle Polygon geometry (rooms, buildings, zones)
+            if geometry_type == 'Polygon':
+                coords = geom.get('coordinates', [[]])[0]
+                if coords:
+                    xs = []
+                    ys = []
+                    for c in coords:
+                        lon, lat = c[0], c[1]
+                        x, y = latlon_to_meters(lat, lon, floor.origin_lat, floor.origin_lon)
+                        xs.append(x)
+                        ys.append(y)
+                    
+                    if rotation_angle != 0 and rotation_center:
+                        xs, ys = rotate_points(xs, ys, rotation_angle, rotation_center[0], rotation_center[1])
+                    
+                    if geom_type == 'room':
+                        fill_color = 'rgba(46, 92, 191, 0.15)'
+                        line_color = '#2e5cbf'
+                    elif geom_type == 'building':
+                        fill_color = 'rgba(200, 200, 200, 0.1)'
+                        line_color = '#666'
+                    else:
+                        fill_color = 'rgba(180, 180, 180, 0.1)'
+                        line_color = '#888'
+                    
+                    fig.add_trace(go.Scatter(
+                        x=xs,
+                        y=ys,
+                        fill='toself',
+                        fillcolor=fill_color,
+                        line=dict(color=line_color, width=1),
+                        name=name,
+                        hovertemplate=f"<b>{name}</b><extra></extra>",
+                        mode='lines',
+                        showlegend=False
+                    ))
+                    
+                    if geom_type == 'room' and xs:
+                        center_x = sum(xs) / len(xs)
+                        center_y = sum(ys) / len(ys)
+                        fig.add_annotation(
+                            x=center_x,
+                            y=center_y,
+                            text=name[:12],
+                            showarrow=False,
+                            font=dict(size=8, color='#1a1a1a')
+                        )
+                    rendered_something = True
+            
+            # Handle MultiPolygon geometry (buildings with multiple parts)
+            elif geometry_type == 'MultiPolygon':
+                all_coords = geom.get('coordinates', [])
+                for polygon_coords in all_coords:
+                    if polygon_coords and len(polygon_coords) > 0:
+                        coords = polygon_coords[0]  # Outer ring
+                        if coords:
+                            xs = []
+                            ys = []
+                            for c in coords:
+                                lon, lat = c[0], c[1]
+                                x, y = latlon_to_meters(lat, lon, floor.origin_lat, floor.origin_lon)
+                                xs.append(x)
+                                ys.append(y)
+                            
+                            if rotation_angle != 0 and rotation_center:
+                                xs, ys = rotate_points(xs, ys, rotation_angle, rotation_center[0], rotation_center[1])
+                            
+                            if geom_type == 'building':
+                                fill_color = 'rgba(200, 200, 200, 0.15)'
+                                line_color = '#555'
+                            else:
+                                fill_color = 'rgba(180, 180, 180, 0.1)'
+                                line_color = '#666'
+                            
+                            fig.add_trace(go.Scatter(
+                                x=xs,
+                                y=ys,
+                                fill='toself',
+                                fillcolor=fill_color,
+                                line=dict(color=line_color, width=1.5),
+                                name=name,
+                                hovertemplate=f"<b>{name}</b><extra></extra>",
+                                mode='lines',
+                                showlegend=False
+                            ))
+                            rendered_something = True
+            
+            # Handle LineString geometry (walls)
+            elif geometry_type == 'LineString':
+                coords = geom.get('coordinates', [])
+                if coords:
+                    xs = []
+                    ys = []
+                    for c in coords:
+                        lon, lat = c[0], c[1]
+                        x, y = latlon_to_meters(lat, lon, floor.origin_lat, floor.origin_lon)
+                        xs.append(x)
+                        ys.append(y)
+                    
+                    if rotation_angle != 0 and rotation_center:
+                        xs, ys = rotate_points(xs, ys, rotation_angle, rotation_center[0], rotation_center[1])
+                    
+                    wall_type = props.get('subType', 'inner')
+                    line_width = 2 if wall_type == 'outer' else 1
+                    
+                    fig.add_trace(go.Scatter(
+                        x=xs,
+                        y=ys,
+                        mode='lines',
+                        line=dict(color='#333', width=line_width),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ))
+                    rendered_something = True
+        
+        return rendered_something
+    except Exception as e:
+        return False
+
+
+def create_floor_plan_base(floor, rotation_angle=0, rotation_center=None):
+    """Create base figure with floor plan image or GeoJSON if available"""
+    fig = go.Figure()
+    
+    if rotation_angle != 0 and rotation_center is None:
+        rotation_center = get_rotation_center(floor)
+    
+    has_floor_plan = False
+    
+    if floor.floor_plan_image and rotation_angle == 0:
+        try:
+            image = Image.open(BytesIO(floor.floor_plan_image))
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            fig.add_layout_image(
+                dict(
+                    source=f"data:image/png;base64,{img_str}",
+                    xref="x",
+                    yref="y",
+                    x=0,
+                    y=floor.height_meters,
+                    sizex=floor.width_meters,
+                    sizey=floor.height_meters,
+                    sizing="stretch",
+                    opacity=0.9,
+                    layer="below"
+                )
+            )
+            has_floor_plan = True
+        except Exception as e:
+            pass
+    
+    if not has_floor_plan and floor.floor_plan_geojson:
+        has_floor_plan = render_geojson_floor_plan(fig, floor, rotation_angle, rotation_center)
+    
+    if not has_floor_plan and floor.floor_plan_type == 'dxf' and floor.floor_plan_geojson:
+        has_floor_plan = render_dxf_floor_plan(fig, floor)
+    
+    # Determine axis ranges - use focus area if all values defined, otherwise use floor dimensions
+    has_focus_area = (
+        floor.focus_min_x is not None and 
+        floor.focus_max_x is not None and
+        floor.focus_min_y is not None and 
+        floor.focus_max_y is not None
+    )
+    
+    if has_focus_area:
+        padding = 1.0
+        x_range = [floor.focus_min_x - padding, floor.focus_max_x + padding]
+        y_range = [floor.focus_min_y - padding, floor.focus_max_y + padding]
+    else:
+        x_range = [0, floor.width_meters or 50]
+        y_range = [0, floor.height_meters or 50]
+    
+    if rotation_angle != 0 and rotation_center:
+        corners = [
+            (x_range[0], y_range[0]),
+            (x_range[1], y_range[0]),
+            (x_range[1], y_range[1]),
+            (x_range[0], y_range[1])
+        ]
+        rxs, rys = [], []
+        for cx, cy in corners:
+            rx, ry = rotate_point(cx, cy, rotation_angle, rotation_center[0], rotation_center[1])
+            rxs.append(rx)
+            rys.append(ry)
+        margin = max(x_range[1] - x_range[0], y_range[1] - y_range[0]) * 0.05
+        x_range = [min(rxs) - margin, max(rxs) + margin]
+        y_range = [min(rys) - margin, max(rys) + margin]
+    
+    fig.update_layout(
+        xaxis=dict(
+            title="X (meters)",
+            showgrid=not has_floor_plan,
+            zeroline=False,
+            constrain='domain',
+            autorange=False,
+            range=x_range
+        ),
+        yaxis=dict(
+            title="Y (meters)",
+            showgrid=not has_floor_plan,
+            zeroline=False,
+            scaleanchor="x",
+            scaleratio=1,
+            autorange=False,
+            range=y_range
+        ),
+        showlegend=True,
+        legend=dict(x=1.02, y=1, bgcolor='rgba(255,255,255,0.8)'),
+        margin=dict(l=50, r=150, t=30, b=30),
+        height=700,
+        plot_bgcolor='rgba(240,240,240,0.3)' if not has_floor_plan else 'rgba(255,255,255,0)',
+        uirevision='constant'
+    )
+    
+    return fig, has_floor_plan
+
+
+def add_gateways_to_figure(fig, gateways_data, rotation_angle=0, rotation_center=None):
+    """Add gateway markers to the figure with status-based colors"""
+    status_colors = {
+        'installed': '#2e5cbf',
+        'active': '#27ae60',
+        'offline': '#e74c3c'
+    }
+    status_labels = {
+        'installed': 'Installed',
+        'active': 'Active',
+        'offline': 'Offline'
+    }
+    
+    for gw in gateways_data:
+        status = gw.get('status', 'installed')
+        color = status_colors.get(status, '#2e5cbf')
+        status_label = status_labels.get(status, 'Unknown')
+        
+        gx, gy = gw['x'], gw['y']
+        if rotation_angle != 0 and rotation_center:
+            gx, gy = rotate_point(gx, gy, rotation_angle, rotation_center[0], rotation_center[1])
+        
+        fig.add_trace(go.Scatter(
+            x=[gx],
+            y=[gy],
+            mode='markers+text',
+            marker=dict(size=18, color=color, symbol='square', 
+                       line=dict(width=2, color='white')),
+            text=[gw['name']],
+            textposition='top center',
+            textfont=dict(size=10, color=color),
+            name=f"Gateway: {gw['name']}",
+            hoverinfo='text',
+            hovertext=f"<b>{gw['name']}</b><br>Status: {status_label}<br>Position: ({gw['x']:.1f}, {gw['y']:.1f})"
+        ))
+
+
+def create_current_location_figure(floor, positions_data, gateways_data, beacon_info, rotation_angle=0, rotation_center=None):
+    """Create figure showing current beacon locations"""
+    fig, has_image = create_floor_plan_base(floor, rotation_angle, rotation_center)
+    add_gateways_to_figure(fig, gateways_data, rotation_angle, rotation_center)
+    
+    colors = ['#e63946', '#2a9d8f', '#e76f51', '#9b59b6', '#3498db', '#f39c12', '#1abc9c', '#e74c3c']
+    
+    for idx, (beacon_name, pos_list) in enumerate(positions_data.items()):
+        if not pos_list:
+            continue
+            
+        color = colors[idx % len(colors)]
+        latest = pos_list[-1]
+        info = beacon_info.get(beacon_name, {})
+        
+        bx, by = latest['x'], latest['y']
+        if rotation_angle != 0 and rotation_center:
+            bx, by = rotate_point(bx, by, rotation_angle, rotation_center[0], rotation_center[1])
+        
+        fig.add_trace(go.Scatter(
+            x=[bx],
+            y=[by],
+            mode='markers',
+            marker=dict(size=16, color=color, symbol='circle',
+                       line=dict(width=2, color='white')),
+            name=beacon_name,
+            hoverinfo='text',
+            hovertext=f"<b>{beacon_name}</b><br>Type: {info.get('type', 'Unknown')}<br>Position: ({latest['x']:.1f}, {latest['y']:.1f})<br>Speed: {latest.get('speed', 0):.2f} m/s"
+        ))
+    
+    fig.update_layout(title=dict(text="Current Locations", x=0.5, font=dict(size=16)))
+    return fig
+
+
+def create_spaghetti_figure(floor, positions_data, gateways_data, beacon_info, rotation_angle=0, rotation_center=None):
+    """Create spaghetti map showing movement trails"""
+    fig, has_image = create_floor_plan_base(floor, rotation_angle, rotation_center)
+    add_gateways_to_figure(fig, gateways_data, rotation_angle, rotation_center)
+    
+    colors = ['#e63946', '#2a9d8f', '#e76f51', '#9b59b6', '#3498db', '#f39c12', '#1abc9c', '#e74c3c']
+    
+    for idx, (beacon_name, pos_list) in enumerate(positions_data.items()):
+        if not pos_list or len(pos_list) < 2:
+            continue
+            
+        color = colors[idx % len(colors)]
+        info = beacon_info.get(beacon_name, {})
+        
+        trail_x = [p['x'] for p in pos_list]
+        trail_y = [p['y'] for p in pos_list]
+        
+        if rotation_angle != 0 and rotation_center:
+            trail_x, trail_y = rotate_points(trail_x, trail_y, rotation_angle, rotation_center[0], rotation_center[1])
+        
+        fig.add_trace(go.Scatter(
+            x=trail_x,
+            y=trail_y,
+            mode='lines',
+            line=dict(color=color, width=3),
+            name=f"{beacon_name} path",
+            opacity=0.7,
+            hoverinfo='text',
+            hovertext=f"<b>{beacon_name}</b><br>Type: {info.get('type', 'Unknown')}<br>Points: {len(pos_list)}"
+        ))
+        
+        if pos_list:
+            fig.add_trace(go.Scatter(
+                x=[trail_x[0]],
+                y=[trail_y[0]],
+                mode='markers',
+                marker=dict(size=10, color=color, symbol='circle-open', line=dict(width=2)),
+                name=f"{beacon_name} start",
+                showlegend=False,
+                hoverinfo='text',
+                hovertext=f"<b>{beacon_name} START</b><br>Time: {pos_list[0]['timestamp'].strftime('%H:%M:%S')}"
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=[trail_x[-1]],
+                y=[trail_y[-1]],
+                mode='markers',
+                marker=dict(size=14, color=color, symbol='circle',
+                           line=dict(width=2, color='white')),
+                name=f"{beacon_name} current",
+                showlegend=False,
+                hoverinfo='text',
+                hovertext=f"<b>{beacon_name} CURRENT</b><br>Time: {pos_list[-1]['timestamp'].strftime('%H:%M:%S')}"
+            ))
+    
+    fig.update_layout(title=dict(text="Spaghetti Map - Movement Trails", x=0.5, font=dict(size=16)))
+    return fig
+
+
+def create_heatmap_figure(floor, positions_data, gateways_data, rotation_angle=0, rotation_center=None):
+    """Create heatmap showing dwell time density"""
+    fig, has_image = create_floor_plan_base(floor, rotation_angle, rotation_center)
+    
+    all_x = []
+    all_y = []
+    for beacon_name, pos_list in positions_data.items():
+        for p in pos_list:
+            all_x.append(p['x'])
+            all_y.append(p['y'])
+    
+    if all_x and all_y:
+        grid_size = 30
+        x_bins = np.linspace(0, floor.width_meters, grid_size + 1)
+        y_bins = np.linspace(0, floor.height_meters, grid_size + 1)
+        
+        heatmap_data, x_edges, y_edges = np.histogram2d(
+            all_x, all_y, bins=[x_bins, y_bins]
+        )
+        
+        heatmap_data = heatmap_data.T
+        
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        
+        heatmap_data_masked = np.where(heatmap_data > 0, heatmap_data, np.nan)
+        
+        fig.add_trace(go.Heatmap(
+            x=x_centers,
+            y=y_centers,
+            z=heatmap_data_masked,
+            colorscale=[
+                [0, 'rgba(255,255,0,0.3)'],
+                [0.25, 'rgba(255,200,0,0.5)'],
+                [0.5, 'rgba(255,100,0,0.6)'],
+                [0.75, 'rgba(255,50,0,0.7)'],
+                [1, 'rgba(255,0,0,0.8)']
+            ],
+            showscale=True,
+            colorbar=dict(title="Density", x=1.15),
+            hovertemplate='X: %{x:.1f}m<br>Y: %{y:.1f}m<br>Count: %{z}<extra></extra>',
+            zsmooth='best'
+        ))
+    
+    add_gateways_to_figure(fig, gateways_data, rotation_angle, rotation_center)
+    
+    fig.update_layout(title=dict(text="Heatmap - Dwell Time Density", x=0.5, font=dict(size=16)))
+    return fig
+
+
+def render_chart_fragment():
+    """Fragment for chart rendering - uses session state for data refresh"""
+    if 'chart_params' not in st.session_state:
+        return
+    
+    params = st.session_state.chart_params
+    
+    with get_db_session() as session:
+        floor = session.query(Floor).filter(Floor.id == params['floor_id']).first()
+        if not floor:
+            st.warning("Floor not found")
+            return
+        
+        gateways = session.query(Gateway).filter(
+            Gateway.floor_id == params['floor_id'],
+            Gateway.is_active == True
+        ).all()
+        
+        gateway_ids = [gw.id for gw in gateways]
+        gateway_statuses = get_gateway_status(session, gateway_ids)
+        
+        gateways_data = [
+            {
+                'name': gw.name, 
+                'x': gw.x_position, 
+                'y': gw.y_position, 
+                'id': gw.id,
+                'status': gateway_statuses.get(gw.id, 'installed')
+            }
+            for gw in gateways
+        ]
+        
+        cutoff_time = datetime.utcnow() - timedelta(minutes=params['time_minutes'])
+        
+        if params['beacon_ids']:
+            beacons_map = {b.id: b for b in session.query(Beacon).filter(
+                Beacon.id.in_(params['beacon_ids'])
+            ).all()}
+            
+            positions_query = session.query(Position).filter(
+                Position.floor_id == params['floor_id'],
+                Position.timestamp >= cutoff_time,
+                Position.beacon_id.in_(params['beacon_ids'])
+            ).order_by(Position.timestamp.asc())
+            
+            max_points = 5000
+            recent_positions = positions_query.limit(max_points).all()
+        else:
+            beacons_map = {}
+            recent_positions = []
+        
+        positions_data = {}
+        beacon_info = {}
+        for pos in recent_positions:
+            beacon = beacons_map.get(pos.beacon_id)
+            if beacon:
+                if beacon.name not in positions_data:
+                    positions_data[beacon.name] = []
+                    beacon_info[beacon.name] = {
+                        'mac': beacon.mac_address,
+                        'type': beacon.resource_type,
+                        'id': beacon.id
+                    }
+                positions_data[beacon.name].append({
+                    'x': pos.x_position,
+                    'y': pos.y_position,
+                    'velocity_x': pos.velocity_x,
+                    'velocity_y': pos.velocity_y,
+                    'speed': pos.speed,
+                    'timestamp': pos.timestamp,
+                    'floor_confidence': getattr(pos, 'floor_confidence', 1.0) or 1.0
+                })
+        
+        st.subheader(f"{floor.name or f'Floor {floor.floor_number}'}")
+        
+        rotation_angle = params.get('rotation_angle', 0)
+        rotation_center = get_rotation_center(floor) if rotation_angle != 0 else None
+        
+        view_mode = params['view_mode']
+        if view_mode == "Current Location":
+            fig = create_current_location_figure(floor, positions_data, gateways_data, beacon_info, rotation_angle, rotation_center)
+        elif view_mode == "Spaghetti Map":
+            fig = create_spaghetti_figure(floor, positions_data, gateways_data, beacon_info, rotation_angle, rotation_center)
+        else:
+            fig = create_heatmap_figure(floor, positions_data, gateways_data, rotation_angle, rotation_center)
+        
+        st.plotly_chart(fig, width='stretch', key="floor_plan_chart")
+        
+        col_stats1, col_stats2, col_stats3, col_stats4 = st.columns(4)
+        
+        with col_stats1:
+            st.metric("Gateways", len(gateways))
+        
+        with col_stats2:
+            st.metric("Beacons Visible", len(positions_data))
+        
+        with col_stats3:
+            total_points = sum(len(p) for p in positions_data.values())
+            st.metric("Data Points", total_points)
+        
+        with col_stats4:
+            st.metric("Time Window", f"{params['time_minutes']}m")
+        
+        if positions_data and view_mode == "Current Location":
+            st.markdown("---")
+            st.subheader("Beacon Details")
+            
+            for beacon_name, pos_list in positions_data.items():
+                if pos_list:
+                    latest = pos_list[-1]
+                    info = beacon_info.get(beacon_name, {})
+                    resource_icon = {
+                        'Staff': '👤', 'Patient': '🏥', 'Asset': '📦',
+                        'Device': '📱', 'Vehicle': '🚗', 'Equipment': '🔧'
+                    }.get(info.get('type', ''), '📍')
+                    
+                    with st.expander(f"{resource_icon} {beacon_name}", expanded=False):
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            st.write(f"**Position:** ({latest['x']:.1f}, {latest['y']:.1f})")
+                        with c2:
+                            st.write(f"**Speed:** {latest.get('speed', 0):.2f} m/s")
+                        with c3:
+                            floor_conf = latest.get('floor_confidence', 1.0)
+                            conf_icon = "🟢" if floor_conf >= 0.8 else ("🟡" if floor_conf >= 0.6 else "🔴")
+                            st.write(f"**Floor Confidence:** {conf_icon} {floor_conf*100:.0f}%")
+                        with c4:
+                            st.write(f"**Updated:** {latest['timestamp'].strftime('%H:%M:%S')}")
+        
+        elif not positions_data:
+            if params['beacon_ids']:
+                st.info("No position data found for the selected beacons in this time frame. Make sure the signal processor is running.")
+            else:
+                st.info("Select beacons to display on the floor plan.")
+
+
+def render():
+    st.title("Live Tracking")
+    
+    with get_db_session() as session:
+        mqtt_config = session.query(MQTTConfig).filter(MQTTConfig.is_active == True).first()
+        
+        if not mqtt_config:
+            st.warning("No MQTT broker configured. Please configure MQTT settings first.")
+            return
+        
+        buildings = session.query(Building).all()
+        if not buildings:
+            st.warning("No buildings configured. Please add a building first.")
+            return
+        
+        building_options = {b.name: b.id for b in buildings}
+        all_beacons = session.query(Beacon).order_by(Beacon.name).all()
+        
+        time_presets = {
+            "5 min": 5,
+            "15 min": 15,
+            "30 min": 30,
+            "1 hour": 60,
+            "2 hours": 120,
+            "4 hours": 240
+        }
+        
+        top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns([2, 2, 2, 2, 2])
+        
+        with top_col1:
+            selected_building = st.selectbox("Building", options=list(building_options.keys()), label_visibility="collapsed")
+        
+        floors = session.query(Floor).filter(
+            Floor.building_id == building_options[selected_building]
+        ).order_by(Floor.floor_number).all()
+        
+        if not floors:
+            st.warning("No floor plans for this building.")
+            return
+        
+        floor_options = {f"Floor {f.floor_number}: {f.name or ''}": f.id for f in floors}
+        
+        with top_col2:
+            selected_floor_name = st.selectbox("Floor", options=list(floor_options.keys()), label_visibility="collapsed")
+            selected_floor_id = floor_options[selected_floor_name]
+        
+        with top_col3:
+            view_mode = st.selectbox(
+                "View",
+                options=["Current Location", "Spaghetti Map", "Heatmap"],
+                index=0,
+                label_visibility="collapsed"
+            )
+        
+        with top_col4:
+            time_selection = st.selectbox(
+                "Time",
+                options=list(time_presets.keys()),
+                index=1,
+                label_visibility="collapsed"
+            )
+            time_minutes = time_presets[time_selection]
+        
+        with top_col5:
+            if st.button("🔄 Update", type="primary", use_container_width=True):
+                st.rerun()
+        
+        floor = session.query(Floor).filter(Floor.id == selected_floor_id).first()
+        
+        if not floor.floor_plan_image and not floor.floor_plan_geojson:
+            st.warning("No floor plan uploaded for this floor.")
+        
+        rotation_angle = render_rotation_controls("live_tracking")
+        
+        resource_types = list(set([b.resource_type for b in all_beacons if b.resource_type]))
+        resource_types.sort()
+        
+        if resource_types:
+            filter_by_type = st.session_state.get('filter_by_type', [])
+            if filter_by_type:
+                filtered_beacons = [b for b in all_beacons if b.resource_type in filter_by_type]
+            else:
+                filtered_beacons = all_beacons
+        else:
+            filtered_beacons = all_beacons
+        
+        select_all = st.session_state.get('live_tracking_select_all', True)
+        if select_all:
+            selected_beacon_ids = [b.id for b in filtered_beacons]
+        else:
+            selected_beacon_names = st.session_state.get('live_tracking_beacon_select', [])
+            beacon_options = {f"{b.name} ({b.mac_address[-8:]})": b.id for b in filtered_beacons}
+            selected_beacon_ids = [beacon_options[name] for name in selected_beacon_names if name in beacon_options]
+        
+        st.session_state.chart_params = {
+            'floor_id': selected_floor_id,
+            'beacon_ids': selected_beacon_ids,
+            'view_mode': view_mode,
+            'time_minutes': time_minutes,
+            'rotation_angle': rotation_angle
+        }
+        
+        auto_refresh = st.session_state.get('auto_refresh', False)
+        if auto_refresh:
+            refresh_interval = st.session_state.get('refresh_interval', 3)
+            
+            @st.fragment(run_every=f"{refresh_interval}s")
+            def auto_refresh_chart():
+                render_chart_fragment()
+            
+            auto_refresh_chart()
+        else:
+            render_chart_fragment()
+        
+        st.markdown("---")
+        
+        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 3, 2])
+        
+        with ctrl_col1:
+            st.markdown("**Beacons**")
+            select_all = st.checkbox("Select All", value=True, key="live_tracking_select_all")
+            
+            if not select_all:
+                beacon_options = {f"{b.name} ({b.mac_address[-8:]})": b.id for b in filtered_beacons}
+                st.multiselect(
+                    "Select Beacons",
+                    options=list(beacon_options.keys()),
+                    default=[],
+                    key="live_tracking_beacon_select",
+                    label_visibility="collapsed"
+                )
+            
+            if resource_types:
+                st.multiselect(
+                    "Filter by Type",
+                    options=resource_types,
+                    default=[],
+                    key="filter_by_type"
+                )
+            
+            st.caption(f"{len(selected_beacon_ids)} beacon(s)")
+        
+        with ctrl_col2:
+            st.markdown("**Signal Processor**")
+            processor = get_signal_processor()
+            processor.check_and_restart()
+            
+            proc_col1, proc_col2 = st.columns(2)
+            with proc_col1:
+                if processor.is_running:
+                    st.success("Running")
+                else:
+                    st.warning("Stopped")
+            with proc_col2:
+                if not processor.is_running:
+                    if st.button("Start", type="primary"):
+                        if processor.start():
+                            st.rerun()
+        
+        with ctrl_col3:
+            st.markdown("**Auto-refresh**")
+            auto_refresh = st.checkbox("Enable", value=False, key="auto_refresh")
+            if auto_refresh:
+                st.slider("Interval (sec)", 2, 10, 3, key="refresh_interval")
+                st.caption("Zoom resets on update")

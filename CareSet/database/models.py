@@ -1,0 +1,463 @@
+import os
+import re
+from datetime import datetime
+from contextlib import contextmanager
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, LargeBinary, Boolean, text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from dotenv import load_dotenv
+
+load_dotenv()
+
+Base = declarative_base()
+
+_engine = None
+_SessionLocal = None
+
+
+class Building(Base):
+    """Building information with GPS coordinates"""
+    __tablename__ = 'buildings'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    address = Column(String(500))
+    latitude = Column(Float)
+    longitude = Column(Float)
+    boundary_coords = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floors = relationship("Floor", back_populates="building", cascade="all, delete-orphan")
+    gateways = relationship("Gateway", back_populates="building", cascade="all, delete-orphan")
+
+
+class Floor(Base):
+    """Floor plan for each story of a building"""
+    __tablename__ = 'floors'
+    
+    id = Column(Integer, primary_key=True)
+    building_id = Column(Integer, ForeignKey('buildings.id'), nullable=False)
+    floor_number = Column(Integer, nullable=False)
+    name = Column(String(255))
+    floor_plan_image = Column(LargeBinary)
+    floor_plan_filename = Column(String(255))
+    floor_plan_geojson = Column(Text)
+    floor_plan_type = Column(String(20), default='image')
+    width_meters = Column(Float, default=50.0)
+    height_meters = Column(Float, default=50.0)
+    origin_lat = Column(Float)
+    origin_lon = Column(Float)
+    origin_x = Column(Float, default=0)
+    origin_y = Column(Float, default=0)
+    focus_min_x = Column(Float)
+    focus_max_x = Column(Float)
+    focus_min_y = Column(Float)
+    focus_max_y = Column(Float)
+    # 3D positioning support
+    floor_height_meters = Column(Float, default=3.5)  # Height of this floor (floor-to-ceiling)
+    floor_elevation_meters = Column(Float, default=0)  # Elevation from ground level
+    inter_floor_attenuation_db = Column(Float, default=15.0)  # Signal loss through floor/ceiling in dB
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    building = relationship("Building", back_populates="floors")
+    gateways = relationship("Gateway", back_populates="floor", cascade="all, delete-orphan")
+    beacons = relationship("Beacon", back_populates="floor", cascade="all, delete-orphan", primaryjoin="Floor.id==Beacon.floor_id")
+    positions = relationship("Position", back_populates="floor", cascade="all, delete-orphan")
+    zones = relationship("Zone", back_populates="floor", cascade="all, delete-orphan")
+    calibration_points = relationship("CalibrationPoint", back_populates="floor", cascade="all, delete-orphan")
+    focus_areas = relationship("FocusArea", back_populates="floor", cascade="all, delete-orphan")
+    coverage_zones = relationship("CoverageZone", back_populates="floor", cascade="all, delete-orphan")
+    alert_zones = relationship("AlertZone", back_populates="floor", cascade="all, delete-orphan")
+    gateway_plans = relationship("GatewayPlan", back_populates="floor", cascade="all, delete-orphan")
+
+
+class Gateway(Base):
+    """Careflow BLE Gateway configuration"""
+    __tablename__ = 'gateways'
+    
+    id = Column(Integer, primary_key=True)
+    building_id = Column(Integer, ForeignKey('buildings.id'), nullable=False)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    mac_address = Column(String(17), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    x_position = Column(Float, nullable=False)
+    y_position = Column(Float, nullable=False)
+    z_position = Column(Float, default=2.5)  # Installation height in meters from floor level
+    latitude = Column(Float)
+    longitude = Column(Float)
+    mqtt_topic = Column(String(255))
+    wifi_ssid = Column(String(255))
+    is_active = Column(Boolean, default=True)
+    signal_strength_calibration = Column(Float, default=-59)
+    path_loss_exponent = Column(Float, default=2.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    building = relationship("Building", back_populates="gateways")
+    floor = relationship("Floor", back_populates="gateways")
+    rssi_signals = relationship("RSSISignal", back_populates="gateway", cascade="all, delete-orphan")
+
+
+class Beacon(Base):
+    """BLE Beacon configuration"""
+    __tablename__ = 'beacons'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'))
+    mac_address = Column(String(17), unique=True, nullable=False)
+    uuid = Column(String(36))
+    major = Column(Integer)
+    minor = Column(Integer)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    resource_type = Column(String(100))
+    assigned_to = Column(String(255))
+    is_fixed = Column(Boolean, default=False)
+    fixed_x = Column(Float)
+    fixed_y = Column(Float)
+    is_reference = Column(Boolean, default=False)  # Reference beacon for floor validation
+    reference_floor_id = Column(Integer, ForeignKey('floors.id'))  # Floor where reference beacon is fixed
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floor = relationship("Floor", back_populates="beacons", foreign_keys=[floor_id])
+    reference_floor = relationship("Floor", foreign_keys=[reference_floor_id])
+    rssi_signals = relationship("RSSISignal", back_populates="beacon", cascade="all, delete-orphan")
+    positions = relationship("Position", back_populates="beacon", cascade="all, delete-orphan")
+
+
+class RSSISignal(Base):
+    """Raw RSSI signal data received from gateways"""
+    __tablename__ = 'rssi_signals'
+    
+    id = Column(Integer, primary_key=True)
+    gateway_id = Column(Integer, ForeignKey('gateways.id'), nullable=False)
+    beacon_id = Column(Integer, ForeignKey('beacons.id'), nullable=False)
+    rssi = Column(Integer, nullable=False)
+    tx_power = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    raw_data = Column(Text)
+    
+    gateway = relationship("Gateway", back_populates="rssi_signals")
+    beacon = relationship("Beacon", back_populates="rssi_signals")
+
+
+class Position(Base):
+    """Calculated position from triangulation"""
+    __tablename__ = 'positions'
+    
+    id = Column(Integer, primary_key=True)
+    beacon_id = Column(Integer, ForeignKey('beacons.id'), nullable=False)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    x_position = Column(Float, nullable=False)
+    y_position = Column(Float, nullable=False)
+    accuracy = Column(Float)
+    velocity_x = Column(Float, default=0)
+    velocity_y = Column(Float, default=0)
+    speed = Column(Float, default=0)
+    heading = Column(Float)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    calculation_method = Column(String(50), default='triangulation')
+    floor_confidence = Column(Float, default=1.0)  # Confidence score for floor assignment (0-1)
+    
+    beacon = relationship("Beacon", back_populates="positions")
+    floor = relationship("Floor", back_populates="positions")
+
+
+class MQTTConfig(Base):
+    """MQTT Broker configuration"""
+    __tablename__ = 'mqtt_config'
+    
+    id = Column(Integer, primary_key=True)
+    broker_host = Column(String(255), nullable=False)
+    broker_port = Column(Integer, default=1883)
+    username = Column(String(255))
+    password_env_key = Column(String(255))
+    topic_prefix = Column(String(255), default='ble/gateway/')
+    use_tls = Column(Boolean, default=False)
+    ca_cert_path = Column(String(500))
+    is_active = Column(Boolean, default=True)
+    auto_discover_beacons = Column(Boolean, default=False)
+    publish_enabled = Column(Boolean, default=False)
+    publish_positions_topic = Column(String(255), default='careflow/positions')
+    publish_alerts_topic = Column(String(255), default='careflow/alerts')
+    refresh_interval = Column(Float, default=1.0)
+    signal_window_seconds = Column(Float, default=3.0)
+    rssi_smoothing_enabled = Column(Boolean, default=True)
+    position_smoothing_alpha = Column(Float, default=0.4)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Zone(Base):
+    """Geofencing zone definition"""
+    __tablename__ = 'zones'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    zone_type = Column(String(50), default='rectangle')
+    x_min = Column(Float, nullable=False)
+    y_min = Column(Float, nullable=False)
+    x_max = Column(Float, nullable=False)
+    y_max = Column(Float, nullable=False)
+    color = Column(String(20), default='#FF0000')
+    alert_on_enter = Column(Boolean, default=True)
+    alert_on_exit = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floor = relationship("Floor", back_populates="zones")
+    alerts = relationship("ZoneAlert", back_populates="zone", cascade="all, delete-orphan")
+
+
+class ZoneAlert(Base):
+    """Zone entry/exit alert events"""
+    __tablename__ = 'zone_alerts'
+    
+    id = Column(Integer, primary_key=True)
+    zone_id = Column(Integer, ForeignKey('zones.id'), nullable=False)
+    beacon_id = Column(Integer, ForeignKey('beacons.id'), nullable=False)
+    alert_type = Column(String(20), nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    x_position = Column(Float)
+    y_position = Column(Float)
+    acknowledged = Column(Boolean, default=False)
+    
+    zone = relationship("Zone", back_populates="alerts")
+
+
+class CalibrationPoint(Base):
+    """Calibration reference points for accuracy improvement"""
+    __tablename__ = 'calibration_points'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    beacon_id = Column(Integer, ForeignKey('beacons.id'), nullable=False)
+    known_x = Column(Float, nullable=False)
+    known_y = Column(Float, nullable=False)
+    measured_x = Column(Float)
+    measured_y = Column(Float)
+    error_distance = Column(Float)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    is_verified = Column(Boolean, default=False)
+    
+    floor = relationship("Floor", back_populates="calibration_points")
+
+
+class FocusArea(Base):
+    """Focus area defining regions of interest on a floor plan - stored as GeoJSON"""
+    __tablename__ = 'focus_areas'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    geojson = Column(Text, nullable=False)
+    area_type = Column(String(50), default='general')
+    priority = Column(Integer, default=1)
+    color = Column(String(20), default='#2e5cbf')
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floor = relationship("Floor", back_populates="focus_areas")
+    coverage_zones = relationship("CoverageZone", back_populates="focus_area")
+    alert_zones = relationship("AlertZone", back_populates="focus_area")
+
+
+class CoverageZone(Base):
+    """Coverage zone for gateway planning - linked to focus areas"""
+    __tablename__ = 'coverage_zones'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    focus_area_id = Column(Integer, ForeignKey('focus_areas.id'))
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    polygon_coords = Column(Text)
+    geojson = Column(Text)
+    target_accuracy = Column(Float, default=1.0)
+    priority = Column(Integer, default=1)
+    color = Column(String(20), default='#2e5cbf')
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floor = relationship("Floor", back_populates="coverage_zones")
+    focus_area = relationship("FocusArea", back_populates="coverage_zones")
+
+
+class AlertZone(Base):
+    """Alert zone for geofencing - stored as GeoJSON polygon with snap-to-room support"""
+    __tablename__ = 'alert_zones'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    focus_area_id = Column(Integer, ForeignKey('focus_areas.id'))
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    geojson = Column(Text, nullable=False)
+    zone_type = Column(String(50), default='polygon')
+    color = Column(String(20), default='#FF5722')
+    alert_on_enter = Column(Boolean, default=True)
+    alert_on_exit = Column(Boolean, default=True)
+    dwell_time_alert = Column(Boolean, default=False)
+    dwell_time_threshold_seconds = Column(Integer, default=300)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floor = relationship("Floor", back_populates="alert_zones")
+    focus_area = relationship("FocusArea", back_populates="alert_zones")
+
+
+class GatewayPlan(Base):
+    """Gateway placement plan for infrastructure planning before installation"""
+    __tablename__ = 'gateway_plans'
+    
+    id = Column(Integer, primary_key=True)
+    floor_id = Column(Integer, ForeignKey('floors.id'), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    target_accuracy = Column(Float, default=1.0)
+    signal_range = Column(Float, default=15.0)
+    path_loss_exponent = Column(Float, default=2.5)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    floor = relationship("Floor", back_populates="gateway_plans")
+    planned_gateways = relationship("PlannedGateway", back_populates="plan", cascade="all, delete-orphan")
+
+
+class PlannedGateway(Base):
+    """Individual gateway position within a plan"""
+    __tablename__ = 'planned_gateways'
+    
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(Integer, ForeignKey('gateway_plans.id'), nullable=False)
+    name = Column(String(255), nullable=False)
+    x_position = Column(Float, nullable=False)
+    y_position = Column(Float, nullable=False)
+    notes = Column(Text)
+    is_installed = Column(Boolean, default=False)
+    installed_gateway_id = Column(Integer, ForeignKey('gateways.id'))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    plan = relationship("GatewayPlan", back_populates="planned_gateways")
+    installed_gateway = relationship("Gateway")
+
+
+class User(Base):
+    """User account for authentication and access control"""
+    __tablename__ = 'users'
+    __table_args__ = {'schema': 'shared'}
+    
+    id = Column(String, primary_key=True, server_default=text("gen_random_uuid()"))
+    username = Column(String(100), unique=True, nullable=False)
+    password_hash = Column("password", String(255), nullable=False)
+    email = Column(String(255))
+    full_name = Column(String(255))
+    display_name = Column(String(255))
+    role = Column(String(50), default='viewer')  # admin, operator, viewer
+    status = Column(String(50), default='active')
+    is_active = Column(Boolean, default=True)
+    last_login = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Page access permissions (JSON-like string for simplicity)
+    allowed_pages = Column(Text)  # Comma-separated list of allowed pages
+    legacy_careset_id = Column(Integer)
+
+
+class UserSession(Base):
+    """User session tracking"""
+    __tablename__ = 'user_sessions'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, ForeignKey('shared.users.id'), nullable=False)
+    session_token = Column(String(255), unique=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    user = relationship("User")
+
+
+def get_engine():
+    """Create database engine from environment variables (singleton)"""
+    global _engine
+    if _engine is None:
+        database_url = os.environ.get('DATABASE_URL')
+        if not database_url:
+            raise ValueError("DATABASE_URL environment variable is not set")
+        _engine = create_engine(database_url, pool_pre_ping=True, pool_recycle=300)
+    return _engine
+
+
+def get_session_factory():
+    """Get session factory (singleton)"""
+    global _SessionLocal
+    if _SessionLocal is None:
+        engine = get_engine()
+        _SessionLocal = sessionmaker(bind=engine)
+    return _SessionLocal
+
+
+@contextmanager
+def get_db_session():
+    """Context manager for database sessions - ensures proper cleanup"""
+    SessionLocal = get_session_factory()
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_session():
+    """Create a new database session (legacy - use get_db_session context manager instead)"""
+    SessionLocal = get_session_factory()
+    return SessionLocal()
+
+
+def init_db():
+    """Initialize database tables - ensuring schema exists first"""
+    database_url = os.environ.get('DATABASE_URL')
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is not set")
+        
+    # 1. Try to extract schema name from search_path option
+    # Format: ...?options=-csearch_path%3Dschema_name
+    schema_match = re.search(r'search_path(?:%3D|=)([^&]+)', database_url)
+    
+    if schema_match:
+        schema_name = schema_match.group(1)
+        # Create a base connection string without the search_path to create the schema
+        base_url = re.sub(r'\?options=-csearch_path%3D.*$', '', database_url)
+        
+        try:
+            # Connect temporarily to create the schema if it doesn't exist
+            temp_engine = create_engine(base_url)
+            with temp_engine.connect() as conn:
+                conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+                conn.commit()
+            temp_engine.dispose()
+        except Exception as e:
+            print(f"Warning: Could not ensure schema '{schema_name}' exists: {e}")
+
+    # 2. Proceed with normal table creation
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    return engine

@@ -1,0 +1,596 @@
+import streamlit as st
+from database import get_db_session, Building, Floor
+from datetime import datetime
+import base64
+from io import BytesIO
+from PIL import Image
+import json
+import re
+
+
+def show_pending_message():
+    """Display any pending success message from session state"""
+    if 'buildings_success_msg' in st.session_state:
+        st.success(st.session_state['buildings_success_msg'])
+        del st.session_state['buildings_success_msg']
+
+
+def set_success_and_rerun(message):
+    """Store success message in session state and rerun"""
+    st.session_state['buildings_success_msg'] = message
+    st.rerun()
+
+
+def parse_gps_coordinates(coord_string):
+    """
+    Parse GPS coordinates in various formats:
+    - "53.8578°,10.6712° 53.8580°,10.6706°" (pairs separated by space)
+    - "53.8578,10.6712 53.8580,10.6706" (without degree symbols)
+    - "53.8578°, 10.6712°; 53.8580°, 10.6706°" (semicolon separated)
+    - "(53.8578, 10.6712)" (with parentheses and spaces)
+    - "53.8578, 10.6712" (single pair with space after comma)
+    
+    Returns list of (lat, lon) tuples and calculates centroid
+    """
+    if not coord_string or not coord_string.strip():
+        return [], None, None
+    
+    # Remove parentheses, degree symbols, and normalize separators
+    cleaned = coord_string.replace('°', '').replace(';', ' ').replace('(', '').replace(')', '').strip()
+    
+    # Handle "lat, lon" format (space after comma) - normalize to "lat,lon"
+    cleaned = re.sub(r',\s+', ',', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    
+    pairs = []
+    parts = cleaned.split(' ')
+    
+    i = 0
+    while i < len(parts):
+        part = parts[i].strip()
+        if not part:
+            i += 1
+            continue
+            
+        if ',' in part:
+            coords = part.split(',')
+            if len(coords) == 2:
+                try:
+                    lat = float(coords[0].strip())
+                    lon = float(coords[1].strip())
+                    if -90 <= lat <= 90 and -180 <= lon <= 180:
+                        pairs.append((lat, lon))
+                except ValueError:
+                    pass
+        i += 1
+    
+    if not pairs:
+        return [], None, None
+    
+    avg_lat = sum(p[0] for p in pairs) / len(pairs)
+    avg_lon = sum(p[1] for p in pairs) / len(pairs)
+    
+    return pairs, avg_lat, avg_lon
+
+
+def format_coords_for_display(boundary_coords):
+    """Format stored coordinates for display"""
+    if not boundary_coords:
+        return "Not set"
+    try:
+        coords = json.loads(boundary_coords)
+        formatted = " ".join([f"{lat:.4f}°,{lon:.4f}°" for lat, lon in coords])
+        return formatted
+    except:
+        return boundary_coords
+
+
+def parse_geojson(content):
+    """Parse and validate GeoJSON content"""
+    try:
+        data = json.loads(content)
+        if data.get('type') != 'FeatureCollection':
+            return None, "GeoJSON must be a FeatureCollection"
+        if 'features' not in data:
+            return None, "GeoJSON must contain features"
+        return data, None
+    except json.JSONDecodeError as e:
+        return None, f"Invalid JSON: {str(e)}"
+
+
+def extract_geojson_bounds(geojson_data):
+    """Extract bounding box from GeoJSON features"""
+    min_lat, max_lat = 90, -90
+    min_lon, max_lon = 180, -180
+    
+    def process_coords(coords):
+        nonlocal min_lat, max_lat, min_lon, max_lon
+        if isinstance(coords[0], (int, float)):
+            lon, lat = coords[0], coords[1]
+            min_lat = min(min_lat, lat)
+            max_lat = max(max_lat, lat)
+            min_lon = min(min_lon, lon)
+            max_lon = max(max_lon, lon)
+        else:
+            for c in coords:
+                process_coords(c)
+    
+    for feature in geojson_data.get('features', []):
+        geometry = feature.get('geometry', {})
+        coords = geometry.get('coordinates', [])
+        if coords:
+            process_coords(coords)
+    
+    if min_lat == 90:
+        return None
+    
+    return {
+        'min_lat': min_lat,
+        'max_lat': max_lat,
+        'min_lon': min_lon,
+        'max_lon': max_lon,
+        'center_lat': (min_lat + max_lat) / 2,
+        'center_lon': (min_lon + max_lon) / 2
+    }
+
+
+def extract_geojson_rooms(geojson_data):
+    """Extract room names and types from GeoJSON"""
+    rooms = []
+    for feature in geojson_data.get('features', []):
+        props = feature.get('properties', {})
+        geom_type = props.get('geomType', '')
+        name = props.get('name', '')
+        sub_type = props.get('subType', '')
+        
+        if geom_type == 'room' and name:
+            rooms.append({
+                'name': name,
+                'type': sub_type or 'room'
+            })
+    return rooms
+
+
+def render():
+    st.title("Buildings & Floor Plans")
+    st.markdown("Manage buildings and upload architectural floor plans")
+    
+    show_pending_message()
+    
+    tab1, tab2 = st.tabs(["Buildings", "Floor Plans"])
+    
+    with tab1:
+        render_buildings()
+    
+    with tab2:
+        render_floor_plans()
+
+
+def render_buildings():
+    with get_db_session() as session:
+        st.subheader("Add New Building")
+        
+        with st.form("add_building"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                name = st.text_input("Building Name*", placeholder="e.g., Main Office")
+                address = st.text_input("Address", placeholder="123 Main Street")
+            
+            with col2:
+                st.markdown("**GPS Boundary Coordinates**")
+                gps_coords = st.text_area(
+                    "Enter GPS coordinates",
+                    placeholder="53.8578°,10.6712° 53.8580°,10.6706°\n(lat,lon pairs separated by spaces)",
+                    help="Enter latitude,longitude pairs with optional ° symbols. Pairs separated by spaces or semicolons. Example: 53.8578°,10.6712° 53.8580°,10.6706°",
+                    height=100
+                )
+            
+            description = st.text_area("Description", placeholder="Describe the building...")
+            
+            submitted = st.form_submit_button("Add Building", type="primary")
+            
+            if submitted:
+                if name:
+                    coord_pairs, center_lat, center_lon = parse_gps_coordinates(gps_coords)
+                    
+                    boundary_json = json.dumps(coord_pairs) if coord_pairs else None
+                    
+                    building = Building(
+                        name=name,
+                        description=description,
+                        address=address,
+                        latitude=center_lat,
+                        longitude=center_lon,
+                        boundary_coords=boundary_json
+                    )
+                    session.add(building)
+                    session.commit()
+                    
+                    if coord_pairs:
+                        set_success_and_rerun(f"Building '{name}' added with {len(coord_pairs)} boundary points!")
+                    else:
+                        set_success_and_rerun(f"Building '{name}' added successfully!")
+                else:
+                    st.error("Building name is required")
+        
+        st.markdown("---")
+        st.subheader("Existing Buildings")
+        
+        buildings = session.query(Building).order_by(Building.name).all()
+        
+        if buildings:
+            for building in buildings:
+                with st.expander(f"📍 {building.name}", expanded=False):
+                    col1, col2, col3 = st.columns([2, 2, 1])
+                    
+                    with col1:
+                        st.write(f"**Address:** {building.address or 'Not specified'}")
+                        st.write(f"**Description:** {building.description or 'No description'}")
+                    
+                    with col2:
+                        if building.latitude and building.longitude:
+                            st.write(f"**Center GPS:** {building.latitude:.6f}, {building.longitude:.6f}")
+                        else:
+                            st.write("**GPS:** Not set")
+                        
+                        if building.boundary_coords:
+                            try:
+                                coords = json.loads(building.boundary_coords)
+                                st.write(f"**Boundary Points:** {len(coords)}")
+                            except:
+                                pass
+                        
+                        floor_count = session.query(Floor).filter(Floor.building_id == building.id).count()
+                        st.write(f"**Floors:** {floor_count}")
+                    
+                    with col3:
+                        with st.popover("Edit"):
+                            st.markdown("**Edit Building**")
+                            new_name = st.text_input("Building Name", value=building.name, key=f"edit_name_{building.id}")
+                            new_address = st.text_input("Address", value=building.address or "", key=f"edit_addr_{building.id}")
+                            new_desc = st.text_area("Description", value=building.description or "", key=f"edit_desc_{building.id}", height=80)
+                            
+                            st.markdown("**GPS Location**")
+                            col_lat, col_lon = st.columns(2)
+                            with col_lat:
+                                new_lat = st.number_input(
+                                    "Latitude",
+                                    value=float(building.latitude) if building.latitude else 0.0,
+                                    format="%.8f",
+                                    key=f"edit_lat_{building.id}"
+                                )
+                            with col_lon:
+                                new_lon = st.number_input(
+                                    "Longitude", 
+                                    value=float(building.longitude) if building.longitude else 0.0,
+                                    format="%.8f",
+                                    key=f"edit_lon_{building.id}"
+                                )
+                            
+                            st.markdown("**Boundary Coordinates** (optional)")
+                            current_coords = format_coords_for_display(building.boundary_coords) if building.boundary_coords else ""
+                            if current_coords == "Not set":
+                                current_coords = ""
+                            new_gps = st.text_area(
+                                "Multiple boundary points",
+                                value=current_coords,
+                                placeholder="53.8578,10.6712 53.8580,10.6706",
+                                help="For building outline. Enter lat,lon pairs separated by spaces",
+                                key=f"edit_gps_{building.id}",
+                                height=60
+                            )
+                            
+                            if st.button("Save Changes", key=f"save_building_{building.id}", type="primary"):
+                                building.name = new_name
+                                building.address = new_address
+                                building.description = new_desc
+                                
+                                # Use direct lat/lon if provided
+                                if new_lat != 0.0 or new_lon != 0.0:
+                                    building.latitude = new_lat
+                                    building.longitude = new_lon
+                                
+                                # Also parse boundary coords if provided
+                                if new_gps.strip():
+                                    coord_pairs, center_lat, center_lon = parse_gps_coordinates(new_gps)
+                                    building.boundary_coords = json.dumps(coord_pairs) if coord_pairs else None
+                                    # Only override lat/lon if not directly set
+                                    if new_lat == 0.0 and new_lon == 0.0 and center_lat:
+                                        building.latitude = center_lat
+                                        building.longitude = center_lon
+                                
+                                session.commit()
+                                set_success_and_rerun(f"Building '{new_name}' updated!")
+                        
+                        if st.button("Delete", key=f"del_building_{building.id}", type="secondary"):
+                            building_name = building.name
+                            session.delete(building)
+                            session.commit()
+                            set_success_and_rerun(f"Building '{building_name}' deleted")
+                    
+                    if building.boundary_coords:
+                        with st.container():
+                            st.write("**Boundary Coordinates:**")
+                            st.code(format_coords_for_display(building.boundary_coords), language=None)
+        else:
+            st.info("No buildings added yet. Add your first building above.")
+
+
+def render_floor_plans():
+    with get_db_session() as session:
+        buildings = session.query(Building).order_by(Building.name).all()
+        
+        if not buildings:
+            st.warning("Please add a building first before uploading floor plans.")
+            return
+        
+        st.subheader("Upload Floor Plan")
+        st.info("Upload a GeoJSON file containing your architectural floor plan.")
+        
+        building_options = {b.name: b.id for b in buildings}
+        
+        selected_building = st.selectbox("Select Building*", options=list(building_options.keys()), key="geo_building")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            floor_number = st.number_input("Floor Number*", value=0, step=1, help="Use 0 for ground floor, negative for basement", key="geo_floor_num")
+            floor_name = st.text_input("Floor Name", placeholder="e.g., Ground Floor, Level 1", key="geo_floor_name")
+        
+        with col2:
+            st.info("Dimensions will be calculated from GeoJSON bounds")
+        
+        input_method = st.radio(
+            "Input Method",
+            ["Paste GeoJSON", "Upload File"],
+            horizontal=True,
+            help="Choose how to provide your GeoJSON floor plan"
+        )
+        
+        geojson_content = None
+        filename = "floor_plan.geojson"
+        
+        if input_method == "Paste GeoJSON":
+            geojson_text = st.text_area(
+                "Paste GeoJSON Content*",
+                height=300,
+                placeholder='{"type": "FeatureCollection", "features": [...]}',
+                help="Paste the complete GeoJSON content here"
+            )
+            if geojson_text:
+                geojson_content = geojson_text.strip()
+        else:
+            geojson_file = st.file_uploader(
+                "Upload GeoJSON Floor Plan*",
+                type=None,
+                help="Upload a GeoJSON file (.geojson or .json)",
+                key="geo_uploader"
+            )
+            if geojson_file:
+                geojson_content = geojson_file.read().decode('utf-8')
+                filename = geojson_file.name
+        
+        if st.button("Add Floor Plan", type="primary", key="add_geojson_btn"):
+            if not selected_building:
+                st.error("Please select a building")
+            elif not geojson_content:
+                st.error("Please provide GeoJSON content (paste or upload)")
+            else:
+                geojson_data, error = parse_geojson(geojson_content)
+                
+                if error:
+                    st.error(f"GeoJSON Error: {error}")
+                else:
+                    bounds = extract_geojson_bounds(geojson_data)
+                    
+                    if bounds:
+                        lat_range = bounds['max_lat'] - bounds['min_lat']
+                        lon_range = bounds['max_lon'] - bounds['min_lon']
+                        calc_height = lat_range * 111000
+                        calc_width = lon_range * 111000 * abs(cos_deg(bounds['center_lat']))
+                        
+                        floor = Floor(
+                            building_id=building_options[selected_building],
+                            floor_number=floor_number,
+                            name=floor_name or f"Floor {floor_number}",
+                            floor_plan_geojson=geojson_content,
+                            floor_plan_filename=filename,
+                            floor_plan_type='geojson',
+                            width_meters=round(calc_width, 2),
+                            height_meters=round(calc_height, 2),
+                            origin_lat=bounds['min_lat'],
+                            origin_lon=bounds['min_lon']
+                        )
+                        session.add(floor)
+                        session.commit()
+                        
+                        rooms = extract_geojson_rooms(geojson_data)
+                        room_count = len(rooms)
+                        set_success_and_rerun(f"GeoJSON floor plan uploaded! Found {room_count} named rooms. Dimensions: {calc_width:.1f}m x {calc_height:.1f}m")
+                    else:
+                        st.error("Could not extract bounds from GeoJSON")
+        
+        st.markdown("---")
+        st.subheader("Existing Floor Plans")
+        
+        for building in buildings:
+            floors = session.query(Floor).filter(
+                Floor.building_id == building.id
+            ).order_by(Floor.floor_number).all()
+            
+            if floors:
+                st.write(f"**{building.name}**")
+                
+                for floor in floors:
+                    plan_type_label = f"[{floor.floor_plan_type or 'image'}]" if floor.floor_plan_type else ""
+                    with st.expander(f"Floor {floor.floor_number}: {floor.name or ''} {plan_type_label}", expanded=False):
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            if floor.floor_plan_type == 'geojson' and floor.floor_plan_geojson:
+                                render_geojson_preview(floor)
+                            elif floor.floor_plan_image:
+                                try:
+                                    image = Image.open(BytesIO(floor.floor_plan_image))
+                                    st.image(image, caption=f"{floor.name or f'Floor {floor.floor_number}'}", use_container_width=True)
+                                except Exception as e:
+                                    st.error(f"Error displaying image: {e}")
+                        
+                        with col2:
+                            st.write(f"**Type:** {floor.floor_plan_type or 'image'}")
+                            st.write(f"**Dimensions:** {floor.width_meters:.1f}m x {floor.height_meters:.1f}m")
+                            st.write(f"**Filename:** {floor.floor_plan_filename}")
+                            
+                            # 3D positioning settings
+                            floor_height = getattr(floor, 'floor_height_meters', 3.5) or 3.5
+                            floor_elevation = getattr(floor, 'floor_elevation_meters', 0) or 0
+                            inter_floor_atten = getattr(floor, 'inter_floor_attenuation_db', 15.0) or 15.0
+                            st.write(f"**Floor Height:** {floor_height:.1f}m")
+                            st.write(f"**Elevation:** {floor_elevation:.1f}m")
+                            st.write(f"**Inter-floor Attenuation:** {inter_floor_atten:.0f} dB")
+                            
+                            if floor.origin_lat and floor.origin_lon:
+                                st.write(f"**Origin:** {floor.origin_lat:.6f}, {floor.origin_lon:.6f}")
+                            
+                            if floor.floor_plan_type == 'geojson' and floor.floor_plan_geojson:
+                                try:
+                                    geojson_data = json.loads(floor.floor_plan_geojson)
+                                    rooms = extract_geojson_rooms(geojson_data)
+                                    if rooms:
+                                        st.write(f"**Rooms:** {len(rooms)}")
+                                        with st.popover("View Rooms"):
+                                            for room in rooms[:20]:
+                                                st.write(f"• {room['name']} ({room['type']})")
+                                            if len(rooms) > 20:
+                                                st.write(f"... and {len(rooms) - 20} more")
+                                except:
+                                    pass
+                            
+                            with st.popover("Edit Floor Settings"):
+                                st.markdown("**Floor Properties**")
+                                new_floor_name = st.text_input(
+                                    "Floor Name",
+                                    value=floor.name or "",
+                                    key=f"fn_{floor.id}"
+                                )
+                                new_floor_number = st.number_input(
+                                    "Floor Number",
+                                    value=int(floor.floor_number),
+                                    step=1,
+                                    key=f"fnum_{floor.id}"
+                                )
+                                
+                                st.markdown("**GPS Origin (Southwest Corner)**")
+                                st.caption("Set the GPS coordinates of the floor plan origin point")
+                                new_origin_lat = st.number_input(
+                                    "Origin Latitude",
+                                    value=float(floor.origin_lat or 0.0),
+                                    format="%.6f",
+                                    key=f"olat_{floor.id}"
+                                )
+                                new_origin_lon = st.number_input(
+                                    "Origin Longitude",
+                                    value=float(floor.origin_lon or 0.0),
+                                    format="%.6f",
+                                    key=f"olon_{floor.id}"
+                                )
+                                
+                                st.markdown("**Dimensions**")
+                                new_width = st.number_input(
+                                    "Width (meters)",
+                                    value=float(floor.width_meters or 50.0),
+                                    min_value=1.0,
+                                    key=f"fw_{floor.id}"
+                                )
+                                new_height_m = st.number_input(
+                                    "Height (meters)",
+                                    value=float(floor.height_meters or 50.0),
+                                    min_value=1.0,
+                                    key=f"fhm_{floor.id}"
+                                )
+                                
+                                st.markdown("**3D Settings**")
+                                new_height = st.number_input(
+                                    "Floor Height (m)", 
+                                    value=float(floor_height), 
+                                    min_value=1.0, max_value=20.0, step=0.5,
+                                    key=f"fh_{floor.id}"
+                                )
+                                new_elevation = st.number_input(
+                                    "Elevation from Ground (m)", 
+                                    value=float(floor_elevation), 
+                                    min_value=0.0, max_value=500.0, step=0.5,
+                                    key=f"fe_{floor.id}"
+                                )
+                                new_atten = st.number_input(
+                                    "Inter-floor Attenuation (dB)", 
+                                    value=float(inter_floor_atten), 
+                                    min_value=5.0, max_value=40.0, step=1.0,
+                                    key=f"fa_{floor.id}",
+                                    help="Signal loss through floor/ceiling (typical: 10-20 dB)"
+                                )
+                                
+                                if st.button("Save Floor Settings", key=f"save_floor_{floor.id}", type="primary"):
+                                    floor.name = new_floor_name
+                                    floor.floor_number = new_floor_number
+                                    floor.origin_lat = new_origin_lat if new_origin_lat != 0.0 else None
+                                    floor.origin_lon = new_origin_lon if new_origin_lon != 0.0 else None
+                                    floor.width_meters = new_width
+                                    floor.height_meters = new_height_m
+                                    floor.floor_height_meters = new_height
+                                    floor.floor_elevation_meters = new_elevation
+                                    floor.inter_floor_attenuation_db = new_atten
+                                    session.commit()
+                                    set_success_and_rerun("Floor settings updated!")
+                            
+                            if st.button("Delete", key=f"del_floor_{floor.id}", type="secondary"):
+                                session.delete(floor)
+                                session.commit()
+                                set_success_and_rerun("Floor plan deleted")
+                
+                st.markdown("---")
+
+
+def cos_deg(degrees):
+    """Calculate cosine of angle in degrees"""
+    import math
+    return math.cos(math.radians(degrees))
+
+
+def render_geojson_preview(floor):
+    """Render a preview of GeoJSON floor plan"""
+    try:
+        geojson_data = json.loads(floor.floor_plan_geojson)
+        
+        st.markdown("**GeoJSON Floor Plan Preview**")
+        
+        feature_count = len(geojson_data.get('features', []))
+        rooms = extract_geojson_rooms(geojson_data)
+        
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("Features", feature_count)
+        with col_b:
+            st.metric("Named Rooms", len(rooms))
+        with col_c:
+            bounds = extract_geojson_bounds(geojson_data)
+            if bounds:
+                st.metric("Center", f"{bounds['center_lat']:.4f}, {bounds['center_lon']:.4f}")
+        
+        geom_types = {}
+        for feature in geojson_data.get('features', []):
+            props = feature.get('properties', {})
+            geom_type = props.get('geomType', 'unknown')
+            geom_types[geom_type] = geom_types.get(geom_type, 0) + 1
+        
+        if geom_types:
+            st.write("**Feature Types:**")
+            types_str = ", ".join([f"{k}: {v}" for k, v in geom_types.items()])
+            st.write(types_str)
+        
+        with st.popover("View Raw GeoJSON"):
+            st.json(geojson_data)
+            
+    except Exception as e:
+        st.error(f"Error rendering GeoJSON: {e}")

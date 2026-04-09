@@ -1,0 +1,33 @@
+# Node.js
+node_modules/
+dist/
+build/
+.npm/
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Streamlit
+.streamlit/
+
+# Vite/React
+.vite/
+.DS_Store
+Thumbs.db
+
+# CareFlow Specific
+*.log
+tmp/
+attached_assets/
+database/*.db
+
+# Ignore root-level .env if it exists
+.env

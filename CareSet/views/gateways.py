@@ -1,0 +1,1099 @@
+import streamlit as st
+from database import get_db_session, get_session, Building, Floor, Gateway, RSSISignal, Beacon, Zone
+from datetime import datetime, timedelta
+from sqlalchemy import func
+import re
+import json
+import csv
+from io import StringIO
+import math
+import plotly.graph_objects as go
+from streamlit_plotly_events import plotly_events
+from utils.mqtt_handler import get_gateway_mqtt_activity
+from utils.geojson_renderer import rotate_points, rotate_point, render_rotation_controls, get_rotation_center
+
+
+def get_gateway_status(session, gateway_ids, timeout_minutes=2):
+    """
+    Get status for each gateway based on RSSI signal activity and MQTT connection.
+    Returns dict: {gateway_id: status}
+    
+    Status meanings:
+    - 'active': Detected registered beacons within timeout period (Green)
+    - 'connected': Connected to MQTT but not detecting registered beacons (Blue)  
+    - 'offline': No MQTT activity within timeout (Red)
+    - 'installed': Never detected any signals (Blue - just installed)
+    """
+    if not gateway_ids:
+        return {}
+    
+    cutoff_time = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    
+    # Get last signal time from registered beacons
+    latest_signals = session.query(
+        RSSISignal.gateway_id,
+        func.max(RSSISignal.timestamp).label('last_seen')
+    ).filter(
+        RSSISignal.gateway_id.in_(gateway_ids)
+    ).group_by(RSSISignal.gateway_id).all()
+    
+    signal_times = {sig.gateway_id: sig.last_seen for sig in latest_signals}
+    
+    # Get MQTT activity times (from any beacon, not just registered)
+    mqtt_activity = get_gateway_mqtt_activity()
+    
+    # Get gateway MAC addresses for MQTT activity lookup
+    gateways = session.query(Gateway.id, Gateway.mac_address).filter(
+        Gateway.id.in_(gateway_ids)
+    ).all()
+    gateway_macs = {gw.id: gw.mac_address.upper() for gw in gateways}
+    
+    status = {}
+    for gw_id in gateway_ids:
+        gw_mac = gateway_macs.get(gw_id, '')
+        mqtt_last_seen = mqtt_activity.get(gw_mac)
+        signal_last_seen = signal_times.get(gw_id)
+        
+        # Make cutoff timezone-aware if signal time is timezone-aware
+        if signal_last_seen and signal_last_seen.tzinfo is not None:
+            from datetime import timezone
+            cutoff_aware = cutoff_time.replace(tzinfo=timezone.utc)
+        else:
+            cutoff_aware = cutoff_time
+        
+        # Check if gateway is detecting registered beacons
+        if signal_last_seen and signal_last_seen >= cutoff_aware:
+            status[gw_id] = 'active'  # Green - detecting registered beacons
+        # Check if gateway has MQTT activity (connected but no registered beacons nearby)
+        elif mqtt_last_seen and mqtt_last_seen >= cutoff_time:
+            status[gw_id] = 'connected'  # Blue - connected via MQTT
+        # Check if gateway was previously active
+        elif signal_last_seen or mqtt_last_seen:
+            status[gw_id] = 'offline'  # Red - was active but now silent
+        else:
+            status[gw_id] = 'installed'  # Blue - just installed, never seen
+    
+    return status
+
+
+def get_gateway_last_seen(session, gateway_ids):
+    """
+    Get the last seen timestamp for each gateway.
+    Returns dict: {gateway_id: datetime|None}
+    """
+    if not gateway_ids:
+        return {}
+    
+    latest_signals = session.query(
+        RSSISignal.gateway_id,
+        func.max(RSSISignal.timestamp).label('last_seen')
+    ).filter(
+        RSSISignal.gateway_id.in_(gateway_ids)
+    ).group_by(RSSISignal.gateway_id).all()
+    
+    return {sig.gateway_id: sig.last_seen for sig in latest_signals}
+
+
+def meters_to_latlon(x, y, origin_lat, origin_lon):
+    """Convert local meter coordinates back to lat/lon"""
+    lat = origin_lat + (y / 111000)
+    lon = origin_lon + (x / (math.cos(math.radians(origin_lat)) * 111000))
+    return lat, lon
+
+
+def validate_mac_address(mac: str) -> bool:
+    """Validate MAC address format"""
+    pattern = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$')
+    return bool(pattern.match(mac))
+
+
+def show_pending_message():
+    """Display any pending success message from session state"""
+    if 'gateways_success_msg' in st.session_state:
+        st.success(st.session_state['gateways_success_msg'])
+        del st.session_state['gateways_success_msg']
+
+
+def set_success_and_rerun(message):
+    """Store success message in session state and rerun"""
+    st.session_state['gateways_success_msg'] = message
+    st.rerun()
+
+
+def extract_rooms_from_geojson(geojson_str):
+    """Extract room names and their center coordinates from GeoJSON"""
+    rooms = []
+    try:
+        geojson_data = json.loads(geojson_str)
+        for feature in geojson_data.get('features', []):
+            props = feature.get('properties', {})
+            geom = feature.get('geometry', {})
+            
+            if props.get('geomType') == 'room':
+                name = props.get('name', '')
+                if name:
+                    coords = geom.get('coordinates', [])
+                    if coords and geom.get('type') == 'Polygon':
+                        ring = coords[0] if coords else []
+                        if ring:
+                            lons = [c[0] for c in ring]
+                            lats = [c[1] for c in ring]
+                            center_lon = sum(lons) / len(lons)
+                            center_lat = sum(lats) / len(lats)
+                            rooms.append({
+                                'name': name,
+                                'type': props.get('subType', 'room'),
+                                'center_lat': center_lat,
+                                'center_lon': center_lon
+                            })
+    except:
+        pass
+    return rooms
+
+
+def create_floor_plan_figure(floor, gateways=None, rooms=None, for_click=False, gateway_statuses=None, rotation_angle=0, rotation_center=None):
+    """Create a Plotly figure showing the floor plan with rooms and gateways
+    
+    Args:
+        floor: The floor object with floor_plan_geojson
+        gateways: List of gateway objects to display
+        rooms: List of room dictionaries
+        for_click: If True, adds an invisible click layer for capturing clicks anywhere
+        gateway_statuses: Dict mapping gateway_id to status ('installed', 'active', 'offline')
+    """
+    if gateway_statuses is None:
+        gateway_statuses = {}
+    fig = go.Figure()
+    
+    # Track bounds for click layer
+    all_x = []
+    all_y = []
+    
+    if rotation_angle != 0 and rotation_center is None and floor.floor_plan_geojson:
+        try:
+            _gj = json.loads(floor.floor_plan_geojson)
+            _ax, _ay = [], []
+            for _feat in _gj.get('features', []):
+                _g = _feat.get('geometry', {})
+                if _g.get('type') == 'Polygon':
+                    for _c in _g.get('coordinates', [[]])[0]:
+                        _ax.append(_c[0]); _ay.append(_c[1])
+                elif _g.get('type') == 'LineString':
+                    for _c in _g.get('coordinates', []):
+                        _ax.append(_c[0]); _ay.append(_c[1])
+            if _ax and _ay:
+                rotation_center = ((min(_ax) + max(_ax)) / 2, (min(_ay) + max(_ay)) / 2)
+        except:
+            pass
+    
+    if floor.floor_plan_geojson:
+        try:
+            geojson_data = json.loads(floor.floor_plan_geojson)
+            
+            for feature in geojson_data.get('features', []):
+                props = feature.get('properties', {})
+                geom = feature.get('geometry', {})
+                geom_type = props.get('geomType', '')
+                
+                # Handle rooms - either explicit geomType='room' or Polygon with name
+                is_room = (geom_type == 'room' and geom.get('type') == 'Polygon') or \
+                          (geom.get('type') == 'Polygon' and 'name' in props)
+                
+                if is_room:
+                    coords = geom.get('coordinates', [[]])[0]
+                    if coords:
+                        lons = [c[0] for c in coords]
+                        lats = [c[1] for c in coords]
+                        all_x.extend(lons)
+                        all_y.extend(lats)
+                        if rotation_angle != 0 and rotation_center:
+                            lons, lats = rotate_points(lons, lats, rotation_angle, rotation_center[0], rotation_center[1])
+                        name = props.get('name', 'Unnamed')
+                        
+                        fig.add_trace(go.Scatter(
+                            x=lons,
+                            y=lats,
+                            fill='toself',
+                            fillcolor='rgba(46, 92, 191, 0.2)',
+                            line=dict(color='#2e5cbf', width=1),
+                            name=name,
+                            hovertemplate=f"<b>{name}</b><br>Click to place gateway here<extra></extra>",
+                            mode='lines'
+                        ))
+                        
+                        center_lon = sum(lons) / len(lons)
+                        center_lat = sum(lats) / len(lats)
+                        if rotation_angle != 0 and rotation_center:
+                            center_lon, center_lat = rotate_point(center_lon, center_lat, rotation_angle, rotation_center[0], rotation_center[1])
+                        fig.add_annotation(
+                            x=center_lon,
+                            y=center_lat,
+                            text=name[:15],
+                            showarrow=False,
+                            font=dict(size=8, color='#1a1a1a')
+                        )
+                
+                elif geom_type == 'wall' and geom.get('type') == 'LineString':
+                    coords = geom.get('coordinates', [])
+                    if coords:
+                        lons = [c[0] for c in coords]
+                        lats = [c[1] for c in coords]
+                        all_x.extend(lons)
+                        all_y.extend(lats)
+                        if rotation_angle != 0 and rotation_center:
+                            lons, lats = rotate_points(lons, lats, rotation_angle, rotation_center[0], rotation_center[1])
+                        wall_type = props.get('subType', 'inner')
+                        line_width = 2 if wall_type == 'outer' else 1
+                        
+                        fig.add_trace(go.Scatter(
+                            x=lons,
+                            y=lats,
+                            mode='lines',
+                            line=dict(color='#333', width=line_width),
+                            showlegend=False,
+                            hoverinfo='skip'
+                        ))
+        except Exception as e:
+            st.warning(f"Error rendering floor plan: {e}")
+    
+    # Add invisible click layer if enabled (for click-to-place functionality)
+    if for_click and all_x and all_y:
+        import numpy as np
+        min_x, max_x = min(all_x), max(all_x)
+        min_y, max_y = min(all_y), max(all_y)
+        
+        grid_x = np.linspace(min_x, max_x, 20)
+        grid_y = np.linspace(min_y, max_y, 20)
+        click_x = []
+        click_y = []
+        for x in grid_x:
+            for y in grid_y:
+                click_x.append(x)
+                click_y.append(y)
+        
+        if rotation_angle != 0 and rotation_center:
+            click_x, click_y = rotate_points(click_x, click_y, rotation_angle, rotation_center[0], rotation_center[1])
+        
+        fig.add_trace(go.Scatter(
+            x=click_x,
+            y=click_y,
+            mode='markers',
+            marker=dict(size=20, color='rgba(0,0,0,0)', line=dict(width=0)),
+            hoverinfo='x+y',
+            showlegend=False,
+            name='click_layer'
+        ))
+    
+    if gateways:
+        status_colors = {
+            'installed': '#2e5cbf',  # Blue - just installed
+            'connected': '#2e5cbf',  # Blue - connected via MQTT but no registered beacons nearby
+            'active': '#27ae60',     # Green - detecting registered beacons
+            'offline': '#e74c3c'     # Red - no MQTT activity
+        }
+        status_labels = {
+            'installed': 'Installed',
+            'connected': 'Connected',  # Connected to MQTT
+            'active': 'Active', 
+            'offline': 'Offline'
+        }
+        
+        for gw in gateways:
+            if gw.latitude and gw.longitude:
+                status = gateway_statuses.get(gw.id, 'installed')
+                color = status_colors.get(status, '#2e5cbf')
+                status_label = status_labels.get(status, 'Unknown')
+                
+                gw_lon, gw_lat = gw.longitude, gw.latitude
+                if rotation_angle != 0 and rotation_center:
+                    gw_lon, gw_lat = rotate_point(gw_lon, gw_lat, rotation_angle, rotation_center[0], rotation_center[1])
+                
+                fig.add_trace(go.Scatter(
+                    x=[gw_lon],
+                    y=[gw_lat],
+                    mode='markers+text',
+                    marker=dict(symbol='square', size=12, color=color),
+                    text=[gw.name],
+                    textposition='top center',
+                    name=gw.name,
+                    showlegend=False,
+                    hovertemplate=f"<b>{gw.name}</b><br>Status: {status_label}<extra></extra>"
+                ))
+            elif gw.x_position is not None and gw.y_position is not None:
+                status = gateway_statuses.get(gw.id, 'installed')
+                color = status_colors.get(status, '#2e5cbf')
+                status_label = status_labels.get(status, 'Unknown')
+                
+                gw_x, gw_y = gw.x_position, gw.y_position
+                if rotation_angle != 0 and rotation_center:
+                    gw_x, gw_y = rotate_point(gw_x, gw_y, rotation_angle, rotation_center[0], rotation_center[1])
+                
+                fig.add_trace(go.Scatter(
+                    x=[gw_x],
+                    y=[gw_y],
+                    mode='markers+text',
+                    marker=dict(symbol='square', size=12, color=color),
+                    text=[gw.name],
+                    textposition='top center',
+                    name=gw.name,
+                    showlegend=False,
+                    hovertemplate=f"<b>{gw.name}</b><br>Status: {status_label}<extra></extra>"
+                ))
+    
+    # Apply focus area if set
+    x_range = None
+    y_range = None
+    if floor.focus_min_x is not None:
+        # Check if floor uses GPS coordinates (non-zero origin) or meter coordinates (origin at 0,0)
+        if floor.origin_lat and floor.origin_lon:
+            # Convert from meters to lat/lon for GPS-based floors
+            min_lat, min_lon = meters_to_latlon(floor.focus_min_x - 1, floor.focus_min_y - 1, floor.origin_lat, floor.origin_lon)
+            max_lat, max_lon = meters_to_latlon(floor.focus_max_x + 1, floor.focus_max_y + 1, floor.origin_lat, floor.origin_lon)
+            x_range = [min_lon, max_lon]
+            y_range = [min_lat, max_lat]
+        else:
+            # Use meter coordinates directly for floors with origin at (0,0)
+            x_range = [floor.focus_min_x - 1, floor.focus_max_x + 1]
+            y_range = [floor.focus_min_y - 1, floor.focus_max_y + 1]
+    
+    xaxis_config = dict(
+        scaleanchor='y',
+        scaleratio=1,
+        showgrid=False,
+        zeroline=False,
+        showticklabels=False,
+        title='',
+        constrain='domain'
+    )
+    yaxis_config = dict(
+        showgrid=False,
+        zeroline=False,
+        showticklabels=False,
+        title='',
+        constrain='domain'
+    )
+    
+    if x_range:
+        xaxis_config['range'] = x_range
+    if y_range:
+        yaxis_config['range'] = y_range
+    
+    fig.update_layout(
+        showlegend=False,
+        xaxis=xaxis_config,
+        yaxis=yaxis_config,
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=400,
+        plot_bgcolor='white',
+        hovermode='closest',
+        clickmode='event'
+    )
+    
+    return fig
+
+
+def render_import_export():
+    """Render the import/export section for gateways and configurations."""
+    tab1, tab2 = st.tabs(["Export", "Import"])
+    
+    with tab1:
+        with get_db_session() as session:
+            export_type = st.selectbox(
+                "What to Export",
+                options=["Gateways", "Beacons", "All Configurations"],
+                key="export_type_select"
+            )
+            
+            export_format = st.radio(
+                "Format",
+                options=["JSON", "CSV"],
+                horizontal=True,
+                key="export_format_radio"
+            )
+            
+            if st.button("Generate Export", type="primary", key="gen_export_btn"):
+                gateway_data = []
+                beacon_data = []
+                
+                if export_type == "Gateways" or export_type == "All Configurations":
+                    gateways = session.query(Gateway).all()
+                    for gw in gateways:
+                        building = session.query(Building).filter(Building.id == gw.building_id).first()
+                        floor = session.query(Floor).filter(Floor.id == gw.floor_id).first()
+                        gateway_data.append({
+                            'mac_address': gw.mac_address,
+                            'name': gw.name,
+                            'description': gw.description or '',
+                            'building_name': building.name if building else '',
+                            'floor_number': floor.floor_number if floor else 0,
+                            'x_position': gw.x_position,
+                            'y_position': gw.y_position,
+                            'latitude': gw.latitude or '',
+                            'longitude': gw.longitude or '',
+                            'mqtt_topic': gw.mqtt_topic or '',
+                            'wifi_ssid': gw.wifi_ssid or '',
+                            'signal_calibration': gw.signal_strength_calibration,
+                            'path_loss_exponent': gw.path_loss_exponent,
+                            'is_active': gw.is_active
+                        })
+                
+                if export_type == "Beacons" or export_type == "All Configurations":
+                    beacons = session.query(Beacon).all()
+                    for b in beacons:
+                        floor = session.query(Floor).filter(Floor.id == b.floor_id).first() if b.floor_id else None
+                        beacon_data.append({
+                            'mac_address': b.mac_address,
+                            'name': b.name,
+                            'uuid': b.uuid or '',
+                            'major': b.major or 0,
+                            'minor': b.minor or 0,
+                            'description': b.description or '',
+                            'resource_type': b.resource_type or '',
+                            'assigned_to': b.assigned_to or '',
+                            'is_fixed': b.is_fixed,
+                            'floor_number': floor.floor_number if floor else '',
+                            'fixed_x': b.fixed_x or '',
+                            'fixed_y': b.fixed_y or '',
+                            'is_active': b.is_active
+                        })
+                
+                if export_format == "JSON":
+                    if export_type == "All Configurations":
+                        export_data = {"gateways": gateway_data, "beacons": beacon_data}
+                    elif export_type == "Gateways":
+                        export_data = gateway_data
+                    else:
+                        export_data = beacon_data
+                    
+                    json_str = json.dumps(export_data, indent=2)
+                    st.download_button(
+                        "📥 Download JSON",
+                        data=json_str,
+                        file_name=f"careflow_{export_type.lower().replace(' ', '_')}.json",
+                        mime="application/json"
+                    )
+                else:
+                    if export_type == "Gateways" and gateway_data:
+                        output = StringIO()
+                        writer = csv.DictWriter(output, fieldnames=gateway_data[0].keys())
+                        writer.writeheader()
+                        writer.writerows(gateway_data)
+                        st.download_button(
+                            "📥 Download CSV",
+                            data=output.getvalue(),
+                            file_name="careflow_gateways.csv",
+                            mime="text/csv"
+                        )
+                    elif export_type == "Beacons" and beacon_data:
+                        output = StringIO()
+                        writer = csv.DictWriter(output, fieldnames=beacon_data[0].keys())
+                        writer.writeheader()
+                        writer.writerows(beacon_data)
+                        st.download_button(
+                            "📥 Download CSV",
+                            data=output.getvalue(),
+                            file_name="careflow_beacons.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        st.info("Use JSON format for All Configurations export.")
+    
+    with tab2:
+        st.subheader("Import Configuration")
+        
+        import_type = st.selectbox(
+            "What to Import",
+            options=["Gateways", "Beacons"],
+            key="import_type_select"
+        )
+        
+        uploaded_file = st.file_uploader(
+            "Upload JSON or CSV file",
+            type=['json', 'csv'],
+            key="import_file_uploader"
+        )
+        
+        if uploaded_file:
+            try:
+                content = uploaded_file.read().decode('utf-8')
+                
+                if uploaded_file.name.endswith('.json'):
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        if import_type == "Gateways" and 'gateways' in data:
+                            data = data['gateways']
+                        elif import_type == "Beacons" and 'beacons' in data:
+                            data = data['beacons']
+                else:
+                    reader = csv.DictReader(StringIO(content))
+                    data = list(reader)
+                
+                st.success(f"Found {len(data)} {import_type.lower()} to import")
+                
+                if st.button("Import Now", type="primary", key="import_now_btn"):
+                    with get_db_session() as session:
+                        imported = 0
+                        skipped = 0
+                        
+                        for item in data:
+                            try:
+                                if import_type == "Gateways":
+                                    existing = session.query(Gateway).filter(
+                                        Gateway.mac_address == item.get('mac_address', '')
+                                    ).first()
+                                    
+                                    if existing:
+                                        skipped += 1
+                                        continue
+                                    
+                                    building = session.query(Building).filter(
+                                        Building.name == item.get('building_name', '')
+                                    ).first()
+                                    
+                                    floor = None
+                                    if building:
+                                        floor = session.query(Floor).filter(
+                                            Floor.building_id == building.id,
+                                            Floor.floor_number == int(item.get('floor_number', 0))
+                                        ).first()
+                                    
+                                    if building and floor:
+                                        gw = Gateway(
+                                            mac_address=item['mac_address'],
+                                            name=item.get('name', ''),
+                                            description=item.get('description', ''),
+                                            building_id=building.id,
+                                            floor_id=floor.id,
+                                            x_position=float(item.get('x_position', 0)),
+                                            y_position=float(item.get('y_position', 0)),
+                                            is_active=str(item.get('is_active', 'true')).lower() == 'true'
+                                        )
+                                        session.add(gw)
+                                        imported += 1
+                                    else:
+                                        skipped += 1
+                                
+                                elif import_type == "Beacons":
+                                    existing = session.query(Beacon).filter(
+                                        Beacon.mac_address == item.get('mac_address', '')
+                                    ).first()
+                                    
+                                    if existing:
+                                        skipped += 1
+                                        continue
+                                    
+                                    beacon = Beacon(
+                                        mac_address=item['mac_address'],
+                                        name=item.get('name', ''),
+                                        uuid=item.get('uuid', ''),
+                                        major=int(item.get('major', 0)) if item.get('major') else None,
+                                        minor=int(item.get('minor', 0)) if item.get('minor') else None,
+                                        description=item.get('description', ''),
+                                        resource_type=item.get('resource_type', ''),
+                                        assigned_to=item.get('assigned_to', ''),
+                                        is_active=str(item.get('is_active', 'true')).lower() == 'true'
+                                    )
+                                    session.add(beacon)
+                                    imported += 1
+                                    
+                            except Exception as e:
+                                skipped += 1
+                        
+                        session.commit()
+                        st.success(f"Imported {imported} {import_type.lower()}, skipped {skipped}")
+                        st.rerun()
+                        
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+
+
+def render():
+    st.title("Gateway Configuration")
+    st.markdown("Configure Careflow BLE Gateway devices")
+    
+    show_pending_message()
+    
+    with get_db_session() as session:
+        buildings = session.query(Building).order_by(Building.name).all()
+        
+        if not buildings:
+            st.warning("Please add a building first before configuring gateways.")
+            st.info("Go to 'Buildings & Floor Plans' to add a building.")
+            return
+        
+        st.subheader("Add New Gateway")
+        
+        building_options = {b.name: b.id for b in buildings}
+        selected_building_name = st.selectbox("Select Building*", options=list(building_options.keys()))
+        selected_building_id = building_options[selected_building_name]
+        
+        floors = session.query(Floor).filter(
+            Floor.building_id == selected_building_id
+        ).order_by(Floor.floor_number).all()
+        
+        if not floors:
+            st.warning("Please upload a floor plan for this building first.")
+            return
+        
+        floor_options = {f"{f.name or 'Floor ' + str(f.floor_number)} (Level {f.floor_number})": f.id for f in floors}
+        selected_floor_key = st.selectbox("Select Floor*", options=list(floor_options.keys()))
+        selected_floor_id = floor_options[selected_floor_key]
+        
+        # Clear clicked position when floor changes to prevent stale coordinates
+        if 'gw_last_floor_id' not in st.session_state:
+            st.session_state['gw_last_floor_id'] = selected_floor_id
+        elif st.session_state['gw_last_floor_id'] != selected_floor_id:
+            # Floor changed - clear clicked coordinates
+            st.session_state['gw_last_floor_id'] = selected_floor_id
+            if 'gw_clicked_x' in st.session_state:
+                del st.session_state['gw_clicked_x']
+            if 'gw_clicked_y' in st.session_state:
+                del st.session_state['gw_clicked_y']
+            if 'gw_has_clicked' in st.session_state:
+                del st.session_state['gw_has_clicked']
+        
+        selected_floor = session.query(Floor).filter(Floor.id == selected_floor_id).first()
+        
+        existing_gateways = session.query(Gateway).filter(
+            Gateway.floor_id == selected_floor_id
+        ).all()
+        
+        gateway_ids = [gw.id for gw in existing_gateways]
+        gateway_statuses = get_gateway_status(session, gateway_ids)
+        
+        rooms = []
+        if selected_floor and selected_floor.floor_plan_geojson:
+            rooms = extract_rooms_from_geojson(selected_floor.floor_plan_geojson)
+            
+            st.markdown("#### Floor Plan - Click to Place Gateway")
+            st.caption("👆 **Click on the floor plan** to select the exact gateway position, or use the options below.")
+            
+            rotation_angle = render_rotation_controls("gateways")
+            fig = create_floor_plan_figure(selected_floor, existing_gateways, rooms, for_click=True, gateway_statuses=gateway_statuses, rotation_angle=rotation_angle)
+            
+            # Use plotly_events to capture click position
+            # override_height is required for reliable click detection
+            click_data = plotly_events(fig, click_event=True, key="gateway_click_map", override_height=400)
+            
+            # Process click data
+            if click_data and len(click_data) > 0:
+                clicked_x = click_data[0].get('x')
+                clicked_y = click_data[0].get('y')
+                if clicked_x is not None and clicked_y is not None:
+                    if rotation_angle != 0:
+                        if selected_floor.floor_plan_geojson:
+                            try:
+                                gj = json.loads(selected_floor.floor_plan_geojson)
+                                all_cx, all_cy = [], []
+                                for feat in gj.get('features', []):
+                                    g = feat.get('geometry', {})
+                                    if g.get('type') == 'Polygon':
+                                        for c in g.get('coordinates', [[]])[0]:
+                                            all_cx.append(c[0])
+                                            all_cy.append(c[1])
+                                    elif g.get('type') == 'LineString':
+                                        for c in g.get('coordinates', []):
+                                            all_cx.append(c[0])
+                                            all_cy.append(c[1])
+                                if all_cx and all_cy:
+                                    rc = ((min(all_cx)+max(all_cx))/2, (min(all_cy)+max(all_cy))/2)
+                                    clicked_x, clicked_y = rotate_point(clicked_x, clicked_y, -rotation_angle, rc[0], rc[1])
+                            except:
+                                pass
+                    st.session_state['gw_clicked_x'] = clicked_x
+                    st.session_state['gw_clicked_y'] = clicked_y
+                    st.session_state['gw_has_clicked'] = True
+            
+            # Display clicked position if available
+            if 'gw_clicked_x' in st.session_state and 'gw_clicked_y' in st.session_state:
+                clicked_x = st.session_state['gw_clicked_x']
+                clicked_y = st.session_state['gw_clicked_y']
+                
+                # Determine if coordinates are in meters or lat/lon
+                if selected_floor.origin_lat and selected_floor.origin_lon:
+                    # Floor uses GPS coordinates - clicked values are lat/lon
+                    st.success(f"📍 Selected position: Lat {clicked_y:.6f}, Lon {clicked_x:.6f}")
+                else:
+                    # Floor uses meter coordinates directly
+                    st.success(f"📍 Selected position: X = {clicked_x:.2f}m, Y = {clicked_y:.2f}m")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            mac_address = st.text_input(
+                "MAC Address*",
+                placeholder="AA:BB:CC:DD:EE:FF",
+                help="The MAC address of the Careflow gateway"
+            ).upper()
+            
+            name = st.text_input(
+                "Gateway Name*",
+                placeholder="e.g., Entrance Gateway"
+            )
+            
+            wifi_ssid = st.text_input(
+                "WiFi SSID",
+                placeholder="Network name the gateway connects to"
+            )
+        
+        with col2:
+            mqtt_topic = st.text_input(
+                "MQTT Topic",
+                placeholder="ble/gateway/entrance",
+                help="Custom MQTT topic for this gateway"
+            )
+            
+            signal_calibration = st.number_input(
+                "Signal Calibration (dBm)",
+                value=-59,
+                min_value=-100,
+                max_value=0,
+                help="RSSI at 1 meter distance"
+            )
+            
+            path_loss = st.number_input(
+                "Path Loss Exponent",
+                value=2.0,
+                min_value=1.0,
+                max_value=6.0,
+                help="2.0 for free space, 2.5-4 for indoor"
+            )
+        
+        st.markdown("#### Gateway Position")
+        
+        # Determine available position methods
+        position_options = ["Click on Floor Plan", "Select Room", "Enter Coordinates Manually"]
+        if not rooms:
+            position_options = ["Click on Floor Plan", "Enter Coordinates Manually"]
+        
+        position_method = st.radio(
+            "Position Method",
+            position_options,
+            horizontal=True,
+            help="Choose how to specify the gateway position"
+        )
+        
+        latitude = 0.0
+        longitude = 0.0
+        x_position = 0.0
+        y_position = 0.0
+        
+        # Handle "Click on Floor Plan" position method
+        has_clicked = st.session_state.get('gw_has_clicked', False)
+        
+        if position_method == "Click on Floor Plan":
+            if has_clicked and 'gw_clicked_x' in st.session_state and 'gw_clicked_y' in st.session_state:
+                clicked_x = st.session_state['gw_clicked_x']
+                clicked_y = st.session_state['gw_clicked_y']
+                
+                # Check if floor uses GPS or meter coordinates
+                if selected_floor.origin_lat and selected_floor.origin_lon:
+                    # Floor uses GPS - clicked values are lat/lon
+                    latitude = clicked_y
+                    longitude = clicked_x
+                    # Calculate meter positions from origin
+                    lat_diff = latitude - selected_floor.origin_lat
+                    lon_diff = longitude - selected_floor.origin_lon
+                    y_position = lat_diff * 111000
+                    x_position = lon_diff * 111000 * abs(math.cos(math.radians(latitude)))
+                else:
+                    # Floor uses meter coordinates directly
+                    x_position = clicked_x
+                    y_position = clicked_y
+                    # Convert meters to lat/lon if origin is set (even if 0)
+                    if selected_floor.origin_lat is not None and selected_floor.origin_lon is not None:
+                        latitude, longitude = meters_to_latlon(x_position, y_position, 
+                                                               selected_floor.origin_lat, selected_floor.origin_lon)
+                
+                st.info(f"Position: X = {x_position:.2f}m, Y = {y_position:.2f}m")
+                if latitude != 0 or longitude != 0:
+                    st.info(f"GPS: {latitude:.6f}, {longitude:.6f}")
+            else:
+                st.warning("👆 Click on the floor plan above to select a position")
+        
+        elif position_method == "Select Room" and rooms:
+            room_options = ["-- Select a room --"] + [r['name'] for r in rooms]
+            selected_room = st.selectbox("Select Room*", options=room_options)
+            
+            if selected_room != "-- Select a room --":
+                room_data = next((r for r in rooms if r['name'] == selected_room), None)
+                if room_data:
+                    latitude = room_data['center_lat']
+                    longitude = room_data['center_lon']
+                    
+                    if selected_floor.origin_lat and selected_floor.origin_lon:
+                        lat_diff = latitude - selected_floor.origin_lat
+                        lon_diff = longitude - selected_floor.origin_lon
+                        y_position = lat_diff * 111000
+                        x_position = lon_diff * 111000 * abs(math.cos(math.radians(latitude)))
+                    
+                    st.info(f"Room center: {latitude:.6f}, {longitude:.6f}")
+        
+        elif position_method == "Select Room" and not rooms:
+            st.warning("No rooms found in floor plan. Please enter coordinates manually.")
+            position_method = "Enter Coordinates Manually"
+        
+        if position_method == "Enter Coordinates Manually":
+            col3, col4 = st.columns(2)
+            
+            with col3:
+                latitude = st.number_input(
+                    "Latitude (GPS)*",
+                    value=selected_floor.origin_lat if selected_floor and selected_floor.origin_lat else 0.0,
+                    format="%.6f",
+                    min_value=-90.0,
+                    max_value=90.0
+                )
+                
+                x_position = st.number_input(
+                    "X Position (meters)",
+                    value=0.0,
+                    min_value=0.0,
+                    max_value=1000.0,
+                    help="Position from left edge of floor plan"
+                )
+            
+            with col4:
+                longitude = st.number_input(
+                    "Longitude (GPS)*",
+                    value=selected_floor.origin_lon if selected_floor and selected_floor.origin_lon else 0.0,
+                    format="%.6f",
+                    min_value=-180.0,
+                    max_value=180.0
+                )
+                
+                y_position = st.number_input(
+                    "Y Position (meters)",
+                    value=0.0,
+                    min_value=0.0,
+                    max_value=1000.0,
+                    help="Position from bottom edge of floor plan"
+                )
+        
+        # Installation height
+        st.markdown("#### Installation Height")
+        z_position = st.number_input(
+            "Installation Height (meters)",
+            value=2.5,
+            min_value=0.0,
+            max_value=10.0,
+            step=0.1,
+            help="Height of the gateway/anchor installation from the floor level (typically 2-3m)"
+        )
+        
+        description = st.text_area(
+            "Description",
+            placeholder="Describe the gateway location..."
+        )
+        
+        is_active = st.checkbox("Gateway is active", value=True)
+        
+        if st.button("Add Gateway", type="primary"):
+            if not name:
+                st.error("Gateway name is required")
+            elif not mac_address:
+                st.error("MAC address is required")
+            elif not validate_mac_address(mac_address):
+                st.error("Invalid MAC address format. Use AA:BB:CC:DD:EE:FF")
+            elif position_method == "Select Room" and (latitude == 0 and longitude == 0):
+                st.error("Please select a room for the gateway position")
+            elif position_method == "Click on Floor Plan" and not has_clicked:
+                st.error("Please click on the floor plan to select a position")
+            else:
+                existing = session.query(Gateway).filter(
+                    Gateway.mac_address == mac_address
+                ).first()
+                
+                if existing:
+                    st.error("A gateway with this MAC address already exists")
+                else:
+                    gateway = Gateway(
+                        building_id=selected_building_id,
+                        floor_id=selected_floor_id,
+                        mac_address=mac_address,
+                        name=name,
+                        description=description,
+                        x_position=x_position,
+                        y_position=y_position,
+                        z_position=z_position,
+                        latitude=latitude if latitude != 0 else None,
+                        longitude=longitude if longitude != 0 else None,
+                        mqtt_topic=mqtt_topic or None,
+                        wifi_ssid=wifi_ssid or None,
+                        is_active=is_active,
+                        signal_strength_calibration=signal_calibration,
+                        path_loss_exponent=path_loss
+                    )
+                    session.add(gateway)
+                    session.commit()
+                    # Clear clicked position from session state
+                    if 'gw_clicked_x' in st.session_state:
+                        del st.session_state['gw_clicked_x']
+                    if 'gw_clicked_y' in st.session_state:
+                        del st.session_state['gw_clicked_y']
+                    if 'gw_has_clicked' in st.session_state:
+                        del st.session_state['gw_has_clicked']
+                    set_success_and_rerun(f"Gateway '{name}' added successfully!")
+        
+        st.markdown("---")
+        st.subheader("Configured Gateways")
+        
+        gateways = session.query(Gateway).order_by(Gateway.name).all()
+        
+        if gateways:
+            for gw in gateways:
+                floor = session.query(Floor).filter(Floor.id == gw.floor_id).first()
+                building = session.query(Building).filter(Building.id == gw.building_id).first()
+                
+                status_icon = "🟢" if gw.is_active else "🔴"
+                
+                is_editing = st.session_state.get(f'editing_gw_{gw.id}', False)
+                
+                with st.expander(f"{status_icon} {gw.name} ({gw.mac_address})", expanded=is_editing):
+                    if is_editing:
+                        all_buildings = session.query(Building).order_by(Building.name).all()
+                        all_floors_list = []
+                        floor_map = {}
+                        for b in all_buildings:
+                            b_floors = session.query(Floor).filter(Floor.building_id == b.id).order_by(Floor.floor_number).all()
+                            for f in b_floors:
+                                label = f"{b.name} - {f.name or 'Floor ' + str(f.floor_number)}"
+                                all_floors_list.append(label)
+                                floor_map[label] = (b.id, f.id)
+                        
+                        current_floor_idx = 0
+                        for i, label in enumerate(all_floors_list):
+                            if floor_map[label][1] == gw.floor_id:
+                                current_floor_idx = i
+                                break
+                        
+                        with st.form(f"edit_gw_form_{gw.id}"):
+                            st.subheader("Edit Gateway")
+                            edit_col1, edit_col2 = st.columns(2)
+                            with edit_col1:
+                                edit_name = st.text_input("Name", value=gw.name, key=f"edit_name_{gw.id}")
+                                edit_mac = st.text_input("MAC Address", value=gw.mac_address, key=f"edit_mac_{gw.id}")
+                                edit_description = st.text_area("Description", value=gw.description or "", key=f"edit_desc_{gw.id}")
+                                edit_wifi = st.text_input("WiFi SSID", value=gw.wifi_ssid or "", key=f"edit_wifi_{gw.id}")
+                                edit_mqtt = st.text_input("MQTT Topic", value=gw.mqtt_topic or "", key=f"edit_mqtt_{gw.id}")
+                            with edit_col2:
+                                if all_floors_list:
+                                    edit_floor_label = st.selectbox("Building / Floor", options=all_floors_list, index=current_floor_idx, key=f"edit_floor_{gw.id}")
+                                else:
+                                    edit_floor_label = None
+                                    st.info("No floors available")
+                                edit_cal = st.number_input("Signal Calibration (dBm)", min_value=-100, max_value=0, value=int(gw.signal_strength_calibration or -59), key=f"edit_cal_{gw.id}")
+                                edit_ple = st.number_input("Path Loss Exponent", min_value=1.0, max_value=6.0, value=float(gw.path_loss_exponent or 2.0), step=0.1, key=f"edit_ple_{gw.id}")
+                                edit_x = st.number_input("X Position (m)", value=float(gw.x_position or 0.0), step=0.1, key=f"edit_x_{gw.id}")
+                                edit_y = st.number_input("Y Position (m)", value=float(gw.y_position or 0.0), step=0.1, key=f"edit_y_{gw.id}")
+                                edit_z = st.number_input("Z Position / Height (m)", value=float(gw.z_position if gw.z_position is not None else 2.5), step=0.1, key=f"edit_z_{gw.id}")
+                            
+                            btn_col1, btn_col2, _ = st.columns([1, 1, 4])
+                            with btn_col1:
+                                save_clicked = st.form_submit_button("Save", type="primary")
+                            with btn_col2:
+                                cancel_clicked = st.form_submit_button("Cancel")
+                            
+                            if save_clicked:
+                                if not edit_name.strip():
+                                    st.error("Name is required.")
+                                elif not validate_mac_address(edit_mac.strip()):
+                                    st.error("Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
+                                else:
+                                    dup = session.query(Gateway).filter(
+                                        Gateway.mac_address == edit_mac.strip().upper(),
+                                        Gateway.id != gw.id
+                                    ).first()
+                                    if dup:
+                                        st.error("Another gateway with this MAC address already exists.")
+                                    else:
+                                        gw.name = edit_name.strip()
+                                        gw.mac_address = edit_mac.strip().upper()
+                                        gw.description = edit_description.strip() or None
+                                        gw.wifi_ssid = edit_wifi.strip() or None
+                                        gw.mqtt_topic = edit_mqtt.strip() or None
+                                        gw.signal_strength_calibration = float(edit_cal)
+                                        gw.path_loss_exponent = float(edit_ple)
+                                        gw.x_position = float(edit_x)
+                                        gw.y_position = float(edit_y)
+                                        gw.z_position = float(edit_z)
+                                        if edit_floor_label and edit_floor_label in floor_map:
+                                            gw.building_id = floor_map[edit_floor_label][0]
+                                            gw.floor_id = floor_map[edit_floor_label][1]
+                                        session.commit()
+                                        st.session_state.pop(f'editing_gw_{gw.id}', None)
+                                        set_success_and_rerun(f"Gateway '{edit_name.strip()}' updated successfully!")
+                            
+                            if cancel_clicked:
+                                st.session_state.pop(f'editing_gw_{gw.id}', None)
+                                st.rerun()
+                    else:
+                        col1, col2, col3 = st.columns([2, 2, 1])
+                        
+                        with col1:
+                            st.write(f"**Building:** {building.name if building else 'Unknown'}")
+                            st.write(f"**Floor:** {floor.name if floor else 'Unknown'}")
+                            z_height = gw.z_position if gw.z_position else 2.5
+                            st.write(f"**Position:** ({gw.x_position:.1f}m, {gw.y_position:.1f}m, H: {z_height:.1f}m)")
+                            if gw.latitude and gw.longitude:
+                                st.write(f"**GPS:** {gw.latitude:.6f}, {gw.longitude:.6f}")
+                            if gw.wifi_ssid:
+                                st.write(f"**WiFi:** {gw.wifi_ssid}")
+                        
+                        with col2:
+                            st.write(f"**MQTT Topic:** {gw.mqtt_topic or 'Default'}")
+                            st.write(f"**Calibration:** {gw.signal_strength_calibration} dBm")
+                            st.write(f"**Path Loss:** {gw.path_loss_exponent}")
+                            if gw.description:
+                                st.write(f"**Description:** {gw.description}")
+                        
+                        with col3:
+                            if st.button("✏️ Edit", key=f"edit_gw_{gw.id}"):
+                                st.session_state[f'editing_gw_{gw.id}'] = True
+                                st.rerun()
+                            if st.button("Toggle Active", key=f"toggle_gw_{gw.id}"):
+                                gw.is_active = not gw.is_active
+                                session.commit()
+                                st.rerun()
+                            
+                            if st.button("🗑️ Delete", key=f"del_gw_{gw.id}", type="secondary"):
+                                st.session_state['pending_delete_gw_id'] = gw.id
+                                st.session_state['pending_delete_gw_name'] = gw.name
+            
+        # Show delete confirmation outside the gateway loop but inside gateways block
+        if 'pending_delete_gw_id' in st.session_state:
+            pending_id = st.session_state['pending_delete_gw_id']
+            pending_name = st.session_state.get('pending_delete_gw_name', 'Gateway')
+            st.warning(f"⚠️ Are you sure you want to delete gateway '{pending_name}'?")
+            col_yes, col_no, _ = st.columns([1, 1, 4])
+            with col_yes:
+                if st.button("✅ Yes, Delete", key="confirm_delete_yes", type="primary"):
+                    # Delete using direct SQL - first delete related signals
+                    from sqlalchemy import text
+                    try:
+                        # Delete related RSSI signals first
+                        session.execute(text(f"DELETE FROM rssi_signals WHERE gateway_id = {pending_id}"))
+                        # Then delete the gateway
+                        session.execute(text(f"DELETE FROM gateways WHERE id = {pending_id}"))
+                        session.commit()
+                        st.session_state['gateways_success_msg'] = f"Gateway '{pending_name}' deleted (including related signals)"
+                        del st.session_state['pending_delete_gw_id']
+                        if 'pending_delete_gw_name' in st.session_state:
+                            del st.session_state['pending_delete_gw_name']
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Delete failed: {e}")
+            with col_no:
+                if st.button("❌ Cancel", key="confirm_delete_no"):
+                    del st.session_state['pending_delete_gw_id']
+                    if 'pending_delete_gw_name' in st.session_state:
+                        del st.session_state['pending_delete_gw_name']
+                    st.rerun()
+        
+        else:
+            st.info("No gateways configured yet. Add your first gateway above.")
+        
+        # Import/Export Section
+        st.markdown("---")
+        with st.expander("📥 Import / Export", expanded=False):
+            render_import_export()
