@@ -94,7 +94,11 @@ export async function registerRoutes(
 
       res.json({ id: user.id, username: user.username, role: user.role, displayName: user.displayName });
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -118,7 +122,11 @@ export async function registerRoutes(
       (req.session as any).userId = user.id;
       res.json({ id: user.id, username: user.username, role: user.role });
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -196,7 +204,11 @@ export async function registerRoutes(
       });
       res.json(log);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -208,7 +220,11 @@ export async function registerRoutes(
       const safeUsers = usersList.map(({ password, ...u }) => u);
       res.json(safeUsers);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -241,7 +257,11 @@ export async function registerRoutes(
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -267,7 +287,11 @@ export async function registerRoutes(
       const { password, ...safeUser } = user;
       res.json(safeUser);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -291,7 +315,11 @@ export async function registerRoutes(
       }
       res.json({ message: "Password updated" });
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -306,7 +334,11 @@ export async function registerRoutes(
       await storage.deleteUser(userId);
       res.json({ message: "User deleted" });
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -317,7 +349,11 @@ export async function registerRoutes(
       const logs = await storage.getAllActivityLogs(500);
       res.json(logs);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -327,7 +363,11 @@ export async function registerRoutes(
       const logs = await storage.getActivityLogsForUser(req.params.id as string, 200);
       res.json(logs);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -337,7 +377,11 @@ export async function registerRoutes(
       const stats = await storage.getActivityStats(req.params.id as string);
       res.json(stats);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -348,7 +392,11 @@ export async function registerRoutes(
       const features = await storage.getFeatureAccessForUser(req.params.id as string);
       res.json(features);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -368,7 +416,11 @@ export async function registerRoutes(
       });
       res.json(access);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -380,7 +432,11 @@ export async function registerRoutes(
       const features = await storage.getFeatureAccessForUser(userId);
       res.json(features);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -391,7 +447,11 @@ export async function registerRoutes(
       const configs = await storage.listAppConfigs();
       res.json(configs);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -405,7 +465,11 @@ export async function registerRoutes(
       }
       res.json(config);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -416,7 +480,11 @@ export async function registerRoutes(
       const configs = await storage.listAppConfigs();
       res.json(configs);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -431,7 +499,11 @@ export async function registerRoutes(
       const config = await storage.upsertAppConfig(appId, parsed.data);
       res.json(config);
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -486,7 +558,11 @@ export async function registerRoutes(
       });
 
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -527,7 +603,11 @@ export async function registerRoutes(
 
       res.json({ signed: true, signature: sig });
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -552,7 +632,11 @@ export async function registerRoutes(
       });
       res.json({ logged: true });
     } catch (error) {
-      console.error("API error:", error);
+      console.error("DEBUG - API error detail:", {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        postgresError: (error as any).detail || (error as any).hint
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
