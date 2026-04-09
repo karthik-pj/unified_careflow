@@ -1,0 +1,1769 @@
+Create a login page design featuring a circular arrangement of your 8 apps. Let me start by reading the frontend design skill to ensure I create something distinctive and production-grade.​​​​​​​​​​​​​​​​
+
+Now I’ll create a distinctive login page with a circular arrangement of your 8 apps that represents them as parts of a complete healthcare solution.​​​​​​​​​​​​​​​​
+
+I’ve designed a login page with your 8 apps arranged in a circular formation around a central “CareFlow Data Backbone” core, representing how all apps work together as parts of a complete healthcare solution.
+Key Design Features:
+	∙	Circular Ecosystem: All 8 apps are positioned around a central core, each one a piece of the complete puzzle
+	∙	Visual Hierarchy: The center represents your data backbone, with apps radiating outward
+	∙	Color Coding: Each app has its own distinctive border color for easy identification
+	∙	Interactive Elements: Hover effects on apps to show they’re clickable and interconnected
+	∙	Animated Entry: Apps slide in sequentially on page load, emphasizing the building of a complete system
+	∙	Security Messaging: Clear indication that sessions are monitored and logged
+	∙	Professional Aesthetic: Clean, healthcare-focused design inspired by your brand colors (blues, teals)
+The circular design metaphorically represents that all apps work together as parts of a complete care ecosystem, with the data backbone (CareAPI/FHIR) at the center connecting everything.
+You can customize the colors, adjust spacing, or modify the app icons as needed for your brand guidelines.​​​​​​​​​​​​​​​​
+
+
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CareFlow Systems - Platform Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+```
+    :root {
+        --primary-blue: #0066CC;
+        --secondary-teal: #00A8A8;
+        --accent-orange: #FF6B35;
+        --soft-gray: #F5F7FA;
+        --dark-navy: #1A2332;
+        --light-blue: #E6F2FF;
+        --success-green: #00C48C;
+        --warm-beige: #FFF8F0;
+    }
+
+    body {
+        font-family: 'DM Sans', sans-serif;
+        background: linear-gradient(135deg, var(--warm-beige) 0%, var(--light-blue) 50%, var(--soft-gray) 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    /* Animated background elements */
+    body::before {
+        content: '';
+        position: absolute;
+        width: 600px;
+        height: 600px;
+        background: radial-gradient(circle, rgba(0, 168, 168, 0.1) 0%, transparent 70%);
+        border-radius: 50%;
+        top: -200px;
+        right: -200px;
+        animation: float 20s ease-in-out infinite;
+    }
+
+    body::after {
+        content: '';
+        position: absolute;
+        width: 500px;
+        height: 500px;
+        background: radial-gradient(circle, rgba(0, 102, 204, 0.08) 0%, transparent 70%);
+        border-radius: 50%;
+        bottom: -150px;
+        left: -150px;
+        animation: float 25s ease-in-out infinite reverse;
+    }
+
+    @keyframes float {
+        0%, 100% { transform: translate(0, 0) scale(1); }
+        50% { transform: translate(30px, 30px) scale(1.1); }
+    }
+
+    .container {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 4rem;
+        max-width: 1400px;
+        width: 100%;
+        align-items: center;
+    }
+
+    /* Login Section */
+    .login-section {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(20px);
+        padding: 3rem;
+        border-radius: 24px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.8);
+    }
+
+    .logo-area {
+        margin-bottom: 2.5rem;
+    }
+
+    .logo-text {
+        font-family: 'Playfair Display', serif;
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--primary-blue);
+        margin-bottom: 0.5rem;
+    }
+
+    .tagline {
+        font-size: 0.95rem;
+        color: #6B7280;
+        font-weight: 400;
+    }
+
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+
+    label {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: var(--dark-navy);
+        font-weight: 500;
+        font-size: 0.9rem;
+    }
+
+    input[type="email"],
+    input[type="password"] {
+        width: 100%;
+        padding: 0.95rem 1.2rem;
+        border: 2px solid #E5E7EB;
+        border-radius: 12px;
+        font-size: 1rem;
+        font-family: 'DM Sans', sans-serif;
+        transition: all 0.3s ease;
+        background: white;
+    }
+
+    input[type="email"]:focus,
+    input[type="password"]:focus {
+        outline: none;
+        border-color: var(--primary-blue);
+        box-shadow: 0 0 0 4px rgba(0, 102, 204, 0.1);
+    }
+
+    .remember-forgot {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        font-size: 0.9rem;
+    }
+
+    .remember-me {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .forgot-password {
+        color: var(--primary-blue);
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.3s;
+    }
+
+    .forgot-password:hover {
+        color: var(--secondary-teal);
+    }
+
+    .login-btn {
+        width: 100%;
+        padding: 1rem;
+        background: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-teal) 100%);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-size: 1.05rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-family: 'DM Sans', sans-serif;
+        box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
+    }
+
+    .login-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 102, 204, 0.4);
+    }
+
+    .login-btn:active {
+        transform: translateY(0);
+    }
+
+    .security-note {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: var(--light-blue);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        color: #4B5563;
+        border-left: 3px solid var(--primary-blue);
+    }
+
+    /* Apps Visualization Section */
+    .apps-section {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .section-title {
+        text-align: center;
+        margin-bottom: 3rem;
+    }
+
+    .section-title h2 {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.2rem;
+        color: var(--dark-navy);
+        margin-bottom: 0.5rem;
+    }
+
+    .section-title p {
+        color: #6B7280;
+        font-size: 1.05rem;
+    }
+
+    /* Circular Apps Layout */
+    .apps-circle-container {
+        position: relative;
+        width: 550px;
+        height: 550px;
+        animation: fadeInScale 1s ease-out;
+    }
+
+    @keyframes fadeInScale {
+        from {
+            opacity: 0;
+            transform: scale(0.8);
+        }
+        to {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+
+    /* Center core */
+    .center-core {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 180px;
+        height: 180px;
+        background: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-teal) 100%);
+        border-radius: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        box-shadow: 0 10px 40px rgba(0, 102, 204, 0.3);
+        z-index: 10;
+        animation: pulse 3s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { transform: translate(-50%, -50%) scale(1); }
+        50% { transform: translate(-50%, -50%) scale(1.05); }
+    }
+
+    .center-core-icon {
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .center-core-text {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.3rem;
+        font-weight: 700;
+        text-align: center;
+    }
+
+    .center-core-subtext {
+        font-size: 0.75rem;
+        opacity: 0.9;
+        margin-top: 0.3rem;
+    }
+
+    /* App nodes */
+    .app-node {
+        position: absolute;
+        width: 110px;
+        height: 110px;
+        background: white;
+        border-radius: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        border: 3px solid transparent;
+    }
+
+    .app-node:hover {
+        transform: scale(1.15);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2);
+        z-index: 20;
+    }
+
+    .app-icon {
+        font-size: 2rem;
+        margin-bottom: 0.4rem;
+    }
+
+    .app-name {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--dark-navy);
+        text-align: center;
+        line-height: 1.2;
+    }
+
+    /* Connection lines */
+    .connection-line {
+        position: absolute;
+        height: 2px;
+        background: linear-gradient(90deg, rgba(0, 102, 204, 0.3), rgba(0, 168, 168, 0.3));
+        transform-origin: left center;
+        pointer-events: none;
+        animation: lineGlow 3s ease-in-out infinite;
+    }
+
+    @keyframes lineGlow {
+        0%, 100% { opacity: 0.3; }
+        50% { opacity: 0.6; }
+    }
+
+    /* Individual app positioning (8 apps in circle) */
+    .app-node:nth-child(1) { /* CareBuild - Top */
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        border-color: #FF6B35;
+        animation: slideIn 0.6s ease-out 0.1s backwards;
+    }
+
+    .app-node:nth-child(2) { /* CareSet - Top Right */
+        top: 10%;
+        right: 10%;
+        border-color: #00C48C;
+        animation: slideIn 0.6s ease-out 0.2s backwards;
+    }
+
+    .app-node:nth-child(3) { /* CareVie - Right */
+        top: 50%;
+        right: 0;
+        transform: translateY(-50%);
+        border-color: #8B5CF6;
+        animation: slideIn 0.6s ease-out 0.3s backwards;
+    }
+
+    .app-node:nth-child(4) { /* CareAlert - Bottom Right */
+        bottom: 10%;
+        right: 10%;
+        border-color: #F59E0B;
+        animation: slideIn 0.6s ease-out 0.4s backwards;
+    }
+
+    .app-node:nth-child(5) { /* CareLog - Bottom */
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        border-color: #3B82F6;
+        animation: slideIn 0.6s ease-out 0.5s backwards;
+    }
+
+    .app-node:nth-child(6) { /* CarePath - Bottom Left */
+        bottom: 10%;
+        left: 10%;
+        border-color: #EC4899;
+        animation: slideIn 0.6s ease-out 0.6s backwards;
+    }
+
+    .app-node:nth-child(7) { /* CareOrg - Left */
+        top: 50%;
+        left: 0;
+        transform: translateY(-50%);
+        border-color: #10B981;
+        animation: slideIn 0.6s ease-out 0.7s backwards;
+    }
+
+    .app-node:nth-child(8) { /* CareAPI - Top Left */
+        top: 10%;
+        left: 10%;
+        border-color: #6366F1;
+        animation: slideIn 0.6s ease-out 0.8s backwards;
+    }
+
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: scale(0) translateX(-50%);
+        }
+        to {
+            opacity: 1;
+        }
+    }
+
+    /* Responsive */
+    @media (max-width: 1200px) {
+        .container {
+            grid-template-columns: 1fr;
+            gap: 3rem;
+        }
+
+        .apps-circle-container {
+            width: 450px;
+            height: 450px;
+        }
+
+        .center-core {
+            width: 150px;
+            height: 150px;
+        }
+
+        .app-node {
+            width: 90px;
+            height: 90px;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .apps-circle-container {
+            width: 350px;
+            height: 350px;
+        }
+
+        .center-core {
+            width: 120px;
+            height: 120px;
+        }
+
+        .center-core-text {
+            font-size: 1rem;
+        }
+
+        .app-node {
+            width: 70px;
+            height: 70px;
+        }
+
+        .app-icon {
+            font-size: 1.5rem;
+        }
+
+        .app-name {
+            font-size: 0.65rem;
+        }
+    }
+</style>
+```
+
+</head>
+<body>
+    <div class="container">
+        <!-- Login Section -->
+        <div class="login-section">
+            <div class="logo-area">
+                <div class="logo-text">CareFlow Systems</div>
+                <div class="tagline">Healthcare Intelligence Platform</div>
+            </div>
+
+```
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input type="email" id="email" placeholder="your.name@hospital.com" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Enter your password" required>
+            </div>
+
+            <div class="remember-forgot">
+                <label class="remember-me">
+                    <input type="checkbox" id="remember">
+                    <span>Remember me</span>
+                </label>
+                <a href="#" class="forgot-password">Forgot password?</a>
+            </div>
+
+            <button type="submit" class="login-btn">Access Platform</button>
+
+            <div class="security-note">
+                🔒 All sessions are monitored and protected. Your activity is logged for security and compliance purposes.
+            </div>
+        </form>
+    </div>
+
+    <!-- Apps Visualization Section -->
+    <div class="apps-section">
+        <div class="section-title">
+            <h2>Complete Care Ecosystem</h2>
+            <p>8 integrated applications working as one</p>
+        </div>
+
+        <div class="apps-circle-container">
+            <!-- Center Core -->
+            <div class="center-core">
+                <div class="center-core-icon">⚕️</div>
+                <div class="center-core-text">CareFlow</div>
+                <div class="center-core-subtext">Data Backbone</div>
+            </div>
+
+            <!-- App Nodes (8 apps in circular arrangement) -->
+            <div class="app-node" data-app="carebuild">
+                <div class="app-icon">🏗️</div>
+                <div class="app-name">CareBuild<br><small>Digital Twin</small></div>
+            </div>
+
+            <div class="app-node" data-app="careset">
+                <div class="app-icon">📡</div>
+                <div class="app-name">CareSet<br><small>Infrastructure</small></div>
+            </div>
+
+            <div class="app-node" data-app="carevie">
+                <div class="app-icon">🔍</div>
+                <div class="app-name">CareVie<br><small>Asset Tracking</small></div>
+            </div>
+
+            <div class="app-node" data-app="carealert">
+                <div class="app-icon">🛡️</div>
+                <div class="app-name">CareAlert<br><small>Geofencing</small></div>
+            </div>
+
+            <div class="app-node" data-app="carelog">
+                <div class="app-icon">📦</div>
+                <div class="app-name">CareLog<br><small>Logistics</small></div>
+            </div>
+
+            <div class="app-node" data-app="carepath">
+                <div class="app-icon">📊</div>
+                <div class="app-name">CarePath<br><small>Analytics</small></div>
+            </div>
+
+            <div class="app-node" data-app="careorg">
+                <div class="app-icon">⚙️</div>
+                <div class="app-name">CareOrg<br><small>Orchestration</small></div>
+            </div>
+
+            <div class="app-node" data-app="careapi">
+                <div class="app-icon">🔌</div>
+                <div class="app-name">CareAPI<br><small>FHIR Access</small></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Form handling
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        
+        // Simulate login process
+        console.log('Login attempt:', email);
+        
+        // Here you would normally send credentials to your backend
+        // For now, just show a visual feedback
+        const btn = document.querySelector('.login-btn');
+        btn.textContent = 'Authenticating...';
+        btn.style.opacity = '0.7';
+        
+        setTimeout(() => {
+            btn.textContent = 'Access Granted ✓';
+            btn.style.background = 'linear-gradient(135deg, #00C48C 0%, #00A8A8 100%)';
+            
+            setTimeout(() => {
+                // Redirect to dashboard or app selection
+                alert('Login successful! Redirecting to app dashboard...');
+            }, 1000);
+        }, 1500);
+    });
+
+    // App node interaction
+    document.querySelectorAll('.app-node').forEach(node => {
+        node.addEventListener('click', function() {
+            const appName = this.getAttribute('data-app');
+            console.log('App clicked:', appName);
+            
+            // Visual feedback
+            this.style.transform = 'scale(1.2)';
+            setTimeout(() => {
+                this.style.transform = '';
+            }, 300);
+        });
+    });
+
+    // Add hover effect to show app descriptions
+    const appDescriptions = {
+        'carebuild': 'Build comprehensive digital twins of hospital environments',
+        'careset': 'Plan and deploy sensoric infrastructure throughout facilities',
+        'carevie': 'Search, locate, and track medical devices and assets',
+        'carealert': 'Implement geofencing for patient safety and security',
+        'carelog': 'Manage and optimize hospital logistics operations',
+        'carepath': 'Analyze workflows and provide consultancy insights',
+        'careorg': 'Orchestrate and optimize clinical workflows',
+        'careapi': 'Access data backbone through FHIR-compliant APIs'
+    };
+
+    document.querySelectorAll('.app-node').forEach(node => {
+        node.addEventListener('mouseenter', function() {
+            const appName = this.getAttribute('data-app');
+            console.log(appDescriptions[appName]);
+        });
+    });
+</script>
+```
+
+</body>
+</html>
+
+
+
+
+I’ve created the post-login dashboard page with all the key features you requested:
+Key Features Implemented:
+	1.	8 App Cards Layout - All apps displayed with Launch and PDF access buttons
+	2.	Central Circular Visualization - Shows the CareFlow data backbone at the center (visible on larger screens)
+	3.	PDF Viewer Modal with:
+	∙	Watermarking showing user name and email
+	∙	Protection notice about monitoring
+	∙	Disabled right-click and text selection
+	∙	Content for each app’s presentation
+	4.	Comprehensive Activity Tracking:
+	∙	Session timer showing how long user has been logged in
+	∙	Logs every action (dashboard load, app launches, PDF opens/closes)
+	∙	Tracks duration of PDF viewing
+	∙	Screenshot detection (basic implementation)
+	∙	Logs hover time on app cards
+	∙	All activity stored with timestamp, user email, IP, and session ID
+	5.	User Management Elements:
+	∙	User profile display in header
+	∙	Session monitoring indicator (bottom right)
+	∙	Activity log console output (check browser console to see logs)
+	6.	Security Features:
+	∙	Fixed activity monitor showing session is being tracked
+	∙	Watermarked PDF content
+	∙	Screenshot attempt detection and logging
+	∙	Disabled copy/paste on PDF content
+	∙	Alert when suspicious activity detected
+The activity tracking system logs which user looked at which function, for how long, and detects screenshot attempts. All this data would be sent to your backend API in production for storage and analysis.​​​​​​​​​​​​​​​​
+
+
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CareFlow Systems - Platform Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+```
+    :root {
+        --primary-blue: #0066CC;
+        --secondary-teal: #00A8A8;
+        --accent-orange: #FF6B35;
+        --soft-gray: #F5F7FA;
+        --dark-navy: #1A2332;
+        --light-blue: #E6F2FF;
+        --success-green: #00C48C;
+        --warm-beige: #FFF8F0;
+    }
+
+    body {
+        font-family: 'DM Sans', sans-serif;
+        background: linear-gradient(135deg, var(--warm-beige) 0%, var(--light-blue) 100%);
+        min-height: 100vh;
+        overflow-x: hidden;
+    }
+
+    /* Header */
+    .header {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(20px);
+        padding: 1.2rem 2rem;
+        box-shadow: 0 2px 20px rgba(0, 0, 0, 0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        border-bottom: 1px solid rgba(0, 102, 204, 0.1);
+    }
+
+    .logo-section {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .logo-text {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--primary-blue);
+    }
+
+    .user-section {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .user-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .user-avatar {
+        width: 45px;
+        height: 45px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--primary-blue), var(--secondary-teal));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: 600;
+        font-size: 1.1rem;
+    }
+
+    .user-details {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .user-name {
+        font-weight: 600;
+        color: var(--dark-navy);
+        font-size: 0.95rem;
+    }
+
+    .user-email {
+        font-size: 0.8rem;
+        color: #6B7280;
+    }
+
+    .logout-btn {
+        padding: 0.6rem 1.5rem;
+        background: white;
+        border: 2px solid var(--primary-blue);
+        color: var(--primary-blue);
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: 'DM Sans', sans-serif;
+    }
+
+    .logout-btn:hover {
+        background: var(--primary-blue);
+        color: white;
+    }
+
+    /* Main Content */
+    .main-content {
+        padding: 3rem 2rem;
+        max-width: 1600px;
+        margin: 0 auto;
+    }
+
+    .welcome-banner {
+        background: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-teal) 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
+        color: white;
+        margin-bottom: 3rem;
+        box-shadow: 0 10px 40px rgba(0, 102, 204, 0.2);
+    }
+
+    .welcome-banner h1 {
+        font-family: 'Playfair Display', serif;
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .welcome-banner p {
+        font-size: 1.1rem;
+        opacity: 0.95;
+    }
+
+    /* Apps Grid with Circular Center */
+    .apps-container {
+        display: grid;
+        grid-template-columns: 1fr 600px 1fr;
+        gap: 2rem;
+        align-items: start;
+    }
+
+    /* Left column - 4 apps */
+    .apps-column-left {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+    }
+
+    /* Right column - 4 apps */
+    .apps-column-right {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+    }
+
+    /* Center circular visualization */
+    .center-visualization {
+        position: relative;
+        width: 600px;
+        height: 600px;
+        margin: 0 auto;
+    }
+
+    .center-core-large {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 220px;
+        height: 220px;
+        background: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-teal) 100%);
+        border-radius: 50%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        box-shadow: 0 15px 50px rgba(0, 102, 204, 0.3);
+        z-index: 10;
+        animation: pulse 4s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 15px 50px rgba(0, 102, 204, 0.3); }
+        50% { transform: translate(-50%, -50%) scale(1.05); box-shadow: 0 20px 60px rgba(0, 102, 204, 0.4); }
+    }
+
+    .core-icon {
+        font-size: 3.5rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .core-text {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.6rem;
+        font-weight: 700;
+    }
+
+    .core-subtext {
+        font-size: 0.85rem;
+        opacity: 0.9;
+        margin-top: 0.5rem;
+    }
+
+    /* Connecting lines from center to apps */
+    .connection-lines {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+    }
+
+    .line {
+        position: absolute;
+        height: 2px;
+        background: linear-gradient(90deg, rgba(0, 102, 204, 0.2), transparent);
+        transform-origin: left center;
+    }
+
+    /* App Cards */
+    .app-card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(20px);
+        padding: 2rem;
+        border-radius: 20px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+        cursor: pointer;
+        transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        border: 3px solid transparent;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .app-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 4px;
+        background: linear-gradient(90deg, var(--primary-blue), var(--secondary-teal));
+        transform: scaleX(0);
+        transition: transform 0.3s;
+    }
+
+    .app-card:hover::before {
+        transform: scaleX(1);
+    }
+
+    .app-card:hover {
+        transform: translateY(-8px) scale(1.02);
+        box-shadow: 0 15px 50px rgba(0, 0, 0, 0.15);
+    }
+
+    .app-card-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .app-card-icon {
+        width: 60px;
+        height: 60px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .app-card-title {
+        flex: 1;
+    }
+
+    .app-card-title h3 {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.4rem;
+        color: var(--dark-navy);
+        margin-bottom: 0.3rem;
+    }
+
+    .app-card-title p {
+        font-size: 0.85rem;
+        color: #6B7280;
+    }
+
+    .app-card-description {
+        color: #4B5563;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        margin-bottom: 1.5rem;
+    }
+
+    .app-card-actions {
+        display: flex;
+        gap: 1rem;
+    }
+
+    .btn-primary {
+        flex: 1;
+        padding: 0.75rem 1.5rem;
+        background: linear-gradient(135deg, var(--primary-blue), var(--secondary-teal));
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: 'DM Sans', sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 102, 204, 0.3);
+    }
+
+    .btn-secondary {
+        padding: 0.75rem 1.5rem;
+        background: white;
+        color: var(--primary-blue);
+        border: 2px solid var(--primary-blue);
+        border-radius: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-family: 'DM Sans', sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+    }
+
+    .btn-secondary:hover {
+        background: var(--light-blue);
+    }
+
+    /* Color coding for different apps */
+    .app-card[data-app="carebuild"] .app-card-icon {
+        background: linear-gradient(135deg, #FF6B35, #FF8C61);
+    }
+
+    .app-card[data-app="careset"] .app-card-icon {
+        background: linear-gradient(135deg, #00C48C, #00E6A5);
+    }
+
+    .app-card[data-app="carevie"] .app-card-icon {
+        background: linear-gradient(135deg, #8B5CF6, #A78BFA);
+    }
+
+    .app-card[data-app="carealert"] .app-card-icon {
+        background: linear-gradient(135deg, #F59E0B, #FBBF24);
+    }
+
+    .app-card[data-app="carelog"] .app-card-icon {
+        background: linear-gradient(135deg, #3B82F6, #60A5FA);
+    }
+
+    .app-card[data-app="carepath"] .app-card-icon {
+        background: linear-gradient(135deg, #EC4899, #F472B6);
+    }
+
+    .app-card[data-app="careorg"] .app-card-icon {
+        background: linear-gradient(135deg, #10B981, #34D399);
+    }
+
+    .app-card[data-app="careapi"] .app-card-icon {
+        background: linear-gradient(135deg, #6366F1, #818CF8);
+    }
+
+    /* Activity Monitor */
+    .activity-monitor {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(26, 35, 50, 0.95);
+        backdrop-filter: blur(20px);
+        padding: 1rem 1.5rem;
+        border-radius: 12px;
+        color: white;
+        font-size: 0.85rem;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+        z-index: 200;
+        min-width: 250px;
+    }
+
+    .activity-status {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--success-green);
+        animation: blink 2s infinite;
+    }
+
+    @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
+
+    .activity-details {
+        font-size: 0.75rem;
+        color: rgba(255, 255, 255, 0.7);
+        line-height: 1.5;
+    }
+
+    /* Modal for PDF Viewer */
+    .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .modal.active {
+        display: flex;
+    }
+
+    .modal-content {
+        background: white;
+        width: 90%;
+        max-width: 900px;
+        height: 85vh;
+        border-radius: 20px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+        padding: 1.5rem 2rem;
+        background: linear-gradient(135deg, var(--primary-blue), var(--secondary-teal));
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .modal-header h2 {
+        font-family: 'Playfair Display', serif;
+        font-size: 1.5rem;
+    }
+
+    .close-modal {
+        background: none;
+        border: none;
+        color: white;
+        font-size: 2rem;
+        cursor: pointer;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        transition: background 0.3s;
+    }
+
+    .close-modal:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    .modal-body {
+        flex: 1;
+        padding: 2rem;
+        overflow-y: auto;
+        position: relative;
+    }
+
+    .pdf-viewer {
+        background: #f9fafb;
+        border-radius: 10px;
+        padding: 2rem;
+        min-height: 100%;
+        position: relative;
+    }
+
+    .watermark {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) rotate(-45deg);
+        font-size: 3rem;
+        color: rgba(0, 102, 204, 0.08);
+        font-weight: 700;
+        pointer-events: none;
+        white-space: nowrap;
+        user-select: none;
+    }
+
+    .pdf-content {
+        position: relative;
+        z-index: 1;
+        line-height: 1.8;
+        color: #1F2937;
+    }
+
+    .pdf-content h1 {
+        font-family: 'Playfair Display', serif;
+        color: var(--primary-blue);
+        margin-bottom: 1.5rem;
+    }
+
+    .pdf-content h2 {
+        font-family: 'Playfair Display', serif;
+        color: var(--dark-navy);
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+
+    .pdf-content p {
+        margin-bottom: 1rem;
+    }
+
+    /* Protection overlay */
+    .protection-notice {
+        background: var(--light-blue);
+        padding: 1rem;
+        border-left: 4px solid var(--primary-blue);
+        border-radius: 8px;
+        margin-bottom: 2rem;
+        font-size: 0.9rem;
+        color: #374151;
+    }
+
+    /* Responsive */
+    @media (max-width: 1400px) {
+        .apps-container {
+            grid-template-columns: 1fr;
+            gap: 3rem;
+        }
+
+        .apps-column-left,
+        .apps-column-right {
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        }
+
+        .center-visualization {
+            display: none;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .user-details {
+            display: none;
+        }
+
+        .apps-column-left,
+        .apps-column-right {
+            grid-template-columns: 1fr;
+        }
+
+        .welcome-banner h1 {
+            font-size: 2rem;
+        }
+    }
+</style>
+```
+
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo-section">
+            <div class="logo-text">CareFlow Systems</div>
+        </div>
+        <div class="user-section">
+            <div class="user-info">
+                <div class="user-avatar">DR</div>
+                <div class="user-details">
+                    <div class="user-name">Dr. Rebecca Martinez</div>
+                    <div class="user-email">dr.martinez@hospital.com</div>
+                </div>
+            </div>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+    </header>
+
+```
+<!-- Main Content -->
+<main class="main-content">
+    <!-- Welcome Banner -->
+    <div class="welcome-banner">
+        <h1>Welcome back, Dr. Martinez</h1>
+        <p>Your complete healthcare intelligence platform is ready. Select an application to begin.</p>
+    </div>
+
+    <!-- Apps Container -->
+    <div class="apps-container">
+        <!-- Left Column - 4 Apps -->
+        <div class="apps-column-left">
+            <!-- CareBuild -->
+            <div class="app-card" data-app="carebuild">
+                <div class="app-card-header">
+                    <div class="app-card-icon">🏗️</div>
+                    <div class="app-card-title">
+                        <h3>CareBuild</h3>
+                        <p>Digital Twin Creator</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Build comprehensive digital twins of hospital environments with real-time data integration.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareBuild')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareBuild')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- CareSet -->
+            <div class="app-card" data-app="careset">
+                <div class="app-card-header">
+                    <div class="app-card-icon">📡</div>
+                    <div class="app-card-title">
+                        <h3>CareSet</h3>
+                        <p>Infrastructure Planner</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Plan and deploy sensoric infrastructure throughout your hospital facilities.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareSet')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareSet')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- CareVie -->
+            <div class="app-card" data-app="carevie">
+                <div class="app-card-header">
+                    <div class="app-card-icon">🔍</div>
+                    <div class="app-card-title">
+                        <h3>CareVie</h3>
+                        <p>Asset Tracking</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Search, locate, and track medical devices and assets in real-time across facilities.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareVie')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareVie')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- CareAlert -->
+            <div class="app-card" data-app="carealert">
+                <div class="app-card-header">
+                    <div class="app-card-icon">🛡️</div>
+                    <div class="app-card-title">
+                        <h3>CareAlert</h3>
+                        <p>Geofencing & Safety</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Implement geofencing solutions to keep patients safe, secure, and monitored.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareAlert')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareAlert')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Circular Visualization -->
+        <div class="center-visualization">
+            <div class="center-core-large">
+                <div class="core-icon">⚕️</div>
+                <div class="core-text">CareFlow</div>
+                <div class="core-subtext">Data Backbone</div>
+            </div>
+            <div class="connection-lines">
+                <!-- Lines would be drawn via JS in production -->
+            </div>
+        </div>
+
+        <!-- Right Column - 4 Apps -->
+        <div class="apps-column-right">
+            <!-- CareLog -->
+            <div class="app-card" data-app="carelog">
+                <div class="app-card-header">
+                    <div class="app-card-icon">📦</div>
+                    <div class="app-card-title">
+                        <h3>CareLog</h3>
+                        <p>Logistics Management</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Ensure seamless logistics operations and supply chain management across your facility.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareLog')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareLog')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- CarePath -->
+            <div class="app-card" data-app="carepath">
+                <div class="app-card-header">
+                    <div class="app-card-icon">📊</div>
+                    <div class="app-card-title">
+                        <h3>CarePath</h3>
+                        <p>Workflow Analytics</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Analyze workflows and provide consultancy insights for operational excellence.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CarePath')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CarePath')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- CareOrg -->
+            <div class="app-card" data-app="careorg">
+                <div class="app-card-header">
+                    <div class="app-card-icon">⚙️</div>
+                    <div class="app-card-title">
+                        <h3>CareOrg</h3>
+                        <p>Workflow Orchestration</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Orchestrate and optimize clinical workflows for maximum efficiency and patient care.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareOrg')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareOrg')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- CareAPI -->
+            <div class="app-card" data-app="careapi">
+                <div class="app-card-header">
+                    <div class="app-card-icon">🔌</div>
+                    <div class="app-card-title">
+                        <h3>CareAPI</h3>
+                        <p>FHIR Integration</p>
+                    </div>
+                </div>
+                <div class="app-card-description">
+                    Access the data backbone through FHIR-compliant APIs for seamless integration.
+                </div>
+                <div class="app-card-actions">
+                    <button class="btn-primary" onclick="openApp('CareAPI')">
+                        <span>Launch App</span>
+                        <span>→</span>
+                    </button>
+                    <button class="btn-secondary" onclick="viewPresentation('CareAPI')">
+                        📄 PDF
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- Activity Monitor -->
+<div class="activity-monitor">
+    <div class="activity-status">
+        <div class="status-dot"></div>
+        <strong>Session Active</strong>
+    </div>
+    <div class="activity-details">
+        Session ID: #847392<br>
+        Started: <span id="sessionTime">0:00</span><br>
+        IP: 192.168.1.45<br>
+        All activity logged
+    </div>
+</div>
+
+<!-- PDF Viewer Modal -->
+<div class="modal" id="pdfModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="modalTitle">Application Presentation</h2>
+            <button class="close-modal" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="protection-notice">
+                🔒 <strong>Protected Document:</strong> This presentation is watermarked with your credentials. 
+                Copying, downloading, and screenshots are monitored and logged for security purposes.
+            </div>
+            <div class="pdf-viewer">
+                <div class="watermark" id="watermarkText">
+                    Dr. Rebecca Martinez • dr.martinez@hospital.com
+                </div>
+                <div class="pdf-content" id="pdfContent">
+                    <!-- Content will be loaded dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Session timer
+    let sessionSeconds = 0;
+    setInterval(() => {
+        sessionSeconds++;
+        const minutes = Math.floor(sessionSeconds / 60);
+        const seconds = sessionSeconds % 60;
+        document.getElementById('sessionTime').textContent = 
+            `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }, 1000);
+
+    // Track activity
+    let activityLog = [];
+
+    function logActivity(action, app, duration = null) {
+        const timestamp = new Date().toISOString();
+        const activity = {
+            timestamp,
+            user: 'dr.martinez@hospital.com',
+            action,
+            app,
+            duration,
+            ip: '192.168.1.45',
+            sessionId: '#847392'
+        };
+        activityLog.push(activity);
+        console.log('Activity logged:', activity);
+        
+        // In production, send to backend
+        // sendToBackend('/api/activity-log', activity);
+    }
+
+    // Screenshot detection (basic implementation)
+    document.addEventListener('keyup', (e) => {
+        // Detect common screenshot shortcuts
+        if ((e.key === 'PrintScreen') || 
+            (e.metaKey && e.shiftKey && (e.key === '3' || e.key === '4')) ||
+            (e.ctrlKey && e.shiftKey && e.key === 'S')) {
+            logActivity('SCREENSHOT_ATTEMPT', 'Dashboard');
+            alert('⚠️ Screenshot detected and logged for security purposes.');
+        }
+    });
+
+    // Disable right-click on PDF content
+    document.addEventListener('contextmenu', (e) => {
+        if (e.target.closest('.pdf-viewer')) {
+            e.preventDefault();
+            logActivity('RIGHT_CLICK_ATTEMPT', document.getElementById('modalTitle').textContent);
+            return false;
+        }
+    });
+
+    // Disable text selection on PDF content
+    document.addEventListener('selectstart', (e) => {
+        if (e.target.closest('.pdf-viewer')) {
+            e.preventDefault();
+            return false;
+        }
+    });
+
+    function openApp(appName) {
+        logActivity('APP_LAUNCH', appName);
+        alert(`Launching ${appName}...\n\nIn production, this would open the full application interface.`);
+    }
+
+    const presentationContent = {
+        'CareBuild': `
+            <h1>CareBuild - Digital Twin Platform</h1>
+            <h2>Overview</h2>
+            <p>CareBuild enables healthcare facilities to create comprehensive digital twins of their physical environments, integrating real-time sensor data, spatial mapping, and operational analytics.</p>
+            
+            <h2>Key Features</h2>
+            <p><strong>3D Spatial Mapping:</strong> Create detailed 3D models of your entire facility with room-level precision.</p>
+            <p><strong>Real-Time Data Integration:</strong> Connect live sensor feeds to monitor environmental conditions, occupancy, and equipment status.</p>
+            <p><strong>Simulation Capabilities:</strong> Test scenarios and optimize space utilization before implementing changes.</p>
+            
+            <h2>Benefits</h2>
+            <p>Reduce planning time by 60%, improve space utilization by 35%, and enable data-driven facility decisions.</p>
+            
+            <h2>Implementation Process</h2>
+            <p>1. Initial facility scan and data collection<br>
+            2. Digital twin creation and validation<br>
+            3. Sensor integration and calibration<br>
+            4. Staff training and go-live support</p>
+        `,
+        'CareSet': `
+            <h1>CareSet - Sensoric Infrastructure Platform</h1>
+            <h2>Overview</h2>
+            <p>CareSet provides comprehensive planning and deployment tools for building a robust sensoric infrastructure throughout your healthcare facility.</p>
+            
+            <h2>Infrastructure Components</h2>
+            <p><strong>Environmental Sensors:</strong> Temperature, humidity, air quality monitoring<br>
+            <strong>Location Beacons:</strong> RTLS infrastructure for asset and personnel tracking<br>
+            <strong>Occupancy Sensors:</strong> Real-time space utilization monitoring</p>
+            
+            <h2>Planning Tools</h2>
+            <p>Advanced coverage analysis, interference detection, power consumption planning, and installation sequencing.</p>
+        `,
+        'CareVie': `
+            <h1>CareVie - Asset Tracking & Management</h1>
+            <h2>Overview</h2>
+            <p>CareVie provides real-time visibility into the location and status of medical equipment, mobile assets, and critical devices across your facility.</p>
+            
+            <h2>Tracking Capabilities</h2>
+            <p>Sub-meter accuracy, multi-floor tracking, historical movement patterns, and predictive availability.</p>
+            
+            <h2>Asset Categories</h2>
+            <p>Medical devices, mobile equipment, patient transport, and facility assets - all tracked in one unified platform.</p>
+        `,
+        'CareAlert': `
+            <h1>CareAlert - Patient Safety & Geofencing</h1>
+            <h2>Overview</h2>
+            <p>CareAlert implements intelligent geofencing solutions to enhance patient safety, prevent elopement, and ensure secure facility operations.</p>
+            
+            <h2>Safety Features</h2>
+            <p>Virtual boundaries, instant alerts, movement pattern analysis, and integration with access control systems.</p>
+            
+            <h2>Use Cases</h2>
+            <p>Dementia patient monitoring, infant security, restricted area access, and visitor management.</p>
+        `,
+        'CareLog': `
+            <h1>CareLog - Healthcare Logistics Platform</h1>
+            <h2>Overview</h2>
+            <p>CareLog optimizes hospital logistics operations including supply chain management, internal transport, and inventory control.</p>
+            
+            <h2>Logistics Modules</h2>
+            <p>Supply chain tracking, automated replenishment, transport optimization, and inventory analytics.</p>
+            
+            <h2>Efficiency Gains</h2>
+            <p>Reduce stockouts by 75%, decrease inventory costs by 30%, and improve delivery times by 45%.</p>
+        `,
+        'CarePath': `
+            <h1>CarePath - Workflow Analytics Platform</h1>
+            <h2>Overview</h2>
+            <p>CarePath provides deep analytics into clinical workflows, enabling consultancies and healthcare leaders to identify optimization opportunities.</p>
+            
+            <h2>Analytics Capabilities</h2>
+            <p>Process mining, bottleneck identification, resource utilization analysis, and predictive modeling.</p>
+            
+            <h2>Consulting Applications</h2>
+            <p>Workflow redesign, efficiency benchmarking, staffing optimization, and continuous improvement programs.</p>
+        `,
+        'CareOrg': `
+            <h1>CareOrg - Workflow Orchestration</h1>
+            <h2>Overview</h2>
+            <p>CareOrg orchestrates complex clinical workflows, automating task assignment, resource allocation, and process coordination.</p>
+            
+            <h2>Orchestration Features</h2>
+            <p>Automated task routing, dynamic resource allocation, real-time coordination, and exception handling.</p>
+            
+            <h2>Workflow Types</h2>
+            <p>Patient admission, surgical scheduling, discharge planning, and emergency response protocols.</p>
+        `,
+        'CareAPI': `
+            <h1>CareAPI - FHIR Integration Platform</h1>
+            <h2>Overview</h2>
+            <p>CareAPI provides secure, FHIR-compliant access to the CareFlow data backbone, enabling seamless integration with third-party systems.</p>
+            
+            <h2>API Capabilities</h2>
+            <p>RESTful endpoints, OAuth 2.0 authentication, real-time webhooks, and comprehensive documentation.</p>
+            
+            <h2>Integration Scenarios</h2>
+            <p>EHR integration, mobile app development, business intelligence tools, and custom applications.</p>
+        `
+    };
+
+    function viewPresentation(appName) {
+        const startTime = Date.now();
+        
+        document.getElementById('modalTitle').textContent = `${appName} - Presentation`;
+        document.getElementById('pdfContent').innerHTML = presentationContent[appName] || '<p>Presentation content loading...</p>';
+        document.getElementById('pdfModal').classList.add('active');
+        
+        logActivity('PDF_OPENED', appName);
+        
+        // Track when modal is closed to calculate viewing duration
+        window.currentPdfApp = appName;
+        window.pdfStartTime = startTime;
+    }
+
+    function closeModal() {
+        const duration = Math.round((Date.now() - window.pdfStartTime) / 1000);
+        logActivity('PDF_CLOSED', window.currentPdfApp, duration);
+        
+        document.getElementById('pdfModal').classList.remove('active');
+    }
+
+    function logout() {
+        logActivity('LOGOUT', 'Dashboard', sessionSeconds);
+        
+        // In production, send activity log to backend
+        console.log('Full activity log:', activityLog);
+        
+        alert('Logging out...\n\nActivity log saved:\n' + 
+              `- Total session time: ${Math.floor(sessionSeconds / 60)} minutes\n` +
+              `- Actions performed: ${activityLog.length}`);
+        
+        window.location.href = 'careflow-login.html';
+    }
+
+    // Log page load
+    logActivity('DASHBOARD_LOADED', 'Dashboard');
+    
+    // Track time spent on each app card hover
+    document.querySelectorAll('.app-card').forEach(card => {
+        let hoverStart = null;
+        
+        card.addEventListener('mouseenter', () => {
+            hoverStart = Date.now();
+        });
+        
+        card.addEventListener('mouseleave', () => {
+            if (hoverStart) {
+                const duration = Math.round((Date.now() - hoverStart) / 1000);
+                const appName = card.querySelector('h3').textContent;
+                if (duration > 2) { // Only log if hovered for more than 2 seconds
+                    logActivity('APP_CARD_VIEWED', appName, duration);
+                }
+                hoverStart = null;
+            }
+        });
+    });
+</script>
+```
+
+</body>
+</html>
